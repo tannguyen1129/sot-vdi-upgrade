@@ -57,37 +57,48 @@ export default function ExamPage() {
 
   // 2. Bootstrap: Load User & Thông tin kỳ thi
   useEffect(() => {
-    let cancelled = false;
-    const bootstrap = async () => {
-      try {
-        // Kiểm tra User đăng nhập từ LocalStorage
-        const userStr = localStorage.getItem("user");
-        if (!userStr) {
-          router.push("/login");
-          return;
-        }
-        const localUser = JSON.parse(userStr);
-        if (!cancelled) setUser(localUser);
+  let cancelled = false;
+  const bootstrap = async () => {
+    try {
+      const userStr = localStorage.getItem("user");
+      
+      // [QUAN TRỌNG] Lấy token từ localStorage (hoặc từ object user nếu bác lưu trong đó)
+      // Bác kiểm tra lại lúc Login bác lưu token tên là gì nhé (thường là accessToken hoặc access_token)
+      const token = localStorage.getItem("accessToken") || (userStr ? JSON.parse(userStr).accessToken : null);
 
-        if (!examId) {
-          router.push("/dashboard");
-          return;
-        }
-
-        // Gọi API lấy thông tin đề thi
-        const res = await api.get(`/exams/${examId}`);
-        if (!cancelled) {
-          setExam(res.data);
-          setIsReady(true);
-        }
-      } catch (err) {
-        // Nếu lỗi (vd: ko tìm thấy exam), quay về dashboard
-        router.push("/dashboard");
+      if (!userStr || !token) { 
+        console.log("Thiếu User hoặc Token, đá về Login");
+        router.push("/login");
+        return;
       }
-    };
-    bootstrap();
-    return () => { cancelled = true; };
-  }, [examId, router]);
+      
+      const localUser = JSON.parse(userStr);
+      if (!cancelled) setUser(localUser);
+
+      // --- [FIX CHÍNH] GẮN TOKEN VÀO ĐẦU MỌI REQUEST ---
+      api.defaults.headers.common['Authorization'] = `Bearer ${token}`;
+      // -------------------------------------------------
+
+      if (!examId) {
+        router.push("/dashboard");
+        return;
+      }
+
+      // Giờ gọi API mới không bị 401
+      const res = await api.get(`/exams/${examId}`);
+      if (!cancelled) {
+        setExam(res.data);
+        setIsReady(true);
+      }
+    } catch (err) {
+      console.error("Lỗi tải đề thi:", err);
+      // Nếu lỗi quá nặng thì mới về dashboard
+      router.push("/dashboard");
+    }
+  };
+  bootstrap();
+  return () => { cancelled = true; };
+}, [examId, router]);
 
   // 3. Xử lý Join Exam (Gọi API Backend)
   const handleJoin = async (accessCode: string) => {

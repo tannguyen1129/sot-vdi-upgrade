@@ -162,10 +162,19 @@ export default function GuacamoleDisplay({ token, wsPath, isLocked = false, onAc
 
       const encodedToken = encodeURIComponent(token);
 
-      const wsUrlStr = buildWsCandidates(wsPath || '/guaclite')[0];
-      const wsUrlWithToken = wsUrlStr + (wsUrlStr.includes('?') ? '&' : '?') + `token=${encodedToken}`;
+      // [FIX LOGIC URL]
+      // Lấy URL cơ sở từ wsPath (ví dụ: wss://host/guaclite)
+      const rawWsUrl = buildWsCandidates(wsPath || '/guaclite')[0];
+      
+      // Tách bỏ query params cũ (nếu có) để tránh double token
+      const baseUrl = rawWsUrl.split('?')[0]; 
+      
+      // Tạo URL mới sạch sẽ chỉ chứa 1 token
+      const wsUrlWithToken = `${baseUrl}?token=${encodedToken}`;
 
-      // Khởi tạo Tunnel với URL đã có token
+      console.log("Guacamole WS URL:", wsUrlWithToken); // Debug log để kiểm tra
+
+      // Khởi tạo Tunnel với URL đã chuẩn hóa
       const tunnel = new (Guacamole as any).WebSocketTunnel(wsUrlWithToken);
       const client = new (Guacamole as any).Client(tunnel);
       clientRef.current = client;
@@ -239,13 +248,12 @@ export default function GuacamoleDisplay({ token, wsPath, isLocked = false, onAc
       };
 
       // Connect Params (Handshake)
-      // Lưu ý: Token đã gửi ở URL Tunnel, nhưng gửi lại ở đây cũng không sao
       const rect = containerRef.current!.getBoundingClientRect();
       const width = Math.floor(rect.width);
       const height = Math.floor(rect.height);
 
       const params = new URLSearchParams({
-        token, // Vẫn giữ ở đây để đúng chuẩn protocol handshake
+        token, // Token gửi lại ở handshake body (tùy chỉnh server guacamole-lite)
         width: String(width),
         height: String(height),
         dpi: "96" 

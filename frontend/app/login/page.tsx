@@ -18,15 +18,33 @@ export default function LoginPage() {
     
     try {
       const res = await api.post('/auth/login', { username, password });
-      localStorage.setItem('user', JSON.stringify(res.data));
+
+      // --- [PHẦN SỬA ĐỔI QUAN TRỌNG] ---
+      // Backend trả về: { access_token: "...", user: { ... } }
+      const { access_token, user } = res.data;
+
+      // 1. Lưu Token (quan trọng nhất để gọi API sau này)
+      if (access_token) {
+        localStorage.setItem('accessToken', access_token);
+      }
+
+      // 2. Lưu thông tin User
+      if (user) {
+        localStorage.setItem('user', JSON.stringify(user));
+      }
+
+      // 3. Dispatch event để các component khác (như Navbar) cập nhật
       window.dispatchEvent(new Event('auth-change'));
 
-      if (res.data.role === 'ADMIN') {
+      // 4. Chuyển hướng dựa trên Role (lấy từ object user)
+      if (user?.role === 'ADMIN') {
         router.push('/admin');
       } else {
         router.push('/dashboard');
       }
+      
     } catch (err: any) {
+      console.error("Login Error:", err);
       const msg = err.response?.data?.message || 'Đăng nhập thất bại. Vui lòng kiểm tra lại thông tin.';
       setError(msg);
     } finally {

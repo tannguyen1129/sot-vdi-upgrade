@@ -1,13 +1,17 @@
 import { Injectable, OnModuleInit, Logger } from '@nestjs/common';
 import { UsersService } from '../users/users.service';
 import { UserRole } from '../../entities/user.entity';
+import { JwtService } from '@nestjs/jwt'; // <--- Import JwtService
 
 @Injectable()
 export class AuthService implements OnModuleInit {
   // Tạo Logger để in ra console cho đẹp
   private readonly logger = new Logger(AuthService.name);
 
-  constructor(private usersService: UsersService) {}
+  constructor(
+    private usersService: UsersService,
+    private jwtService: JwtService, // <--- Inject JwtService
+  ) {}
 
   // 1. HÀM TỰ ĐỘNG CHẠY KHI BACKEND KHỞI ĐỘNG
   async onModuleInit() {
@@ -20,7 +24,7 @@ export class AuthService implements OnModuleInit {
     try {
       // Kiểm tra xem đã có admin chưa
       const existingAdmin = await this.usersService.findOne('admin');
-      
+
       if (existingAdmin) {
         this.logger.log('✅ Admin đã tồn tại. Bỏ qua bước tạo mới.');
         return;
@@ -32,10 +36,12 @@ export class AuthService implements OnModuleInit {
         password: '7816404122Tan', // Mật khẩu của bạn
         fullName: 'Super Administrator',
         role: UserRole.ADMIN,
-        className: 'System'
+        className: 'System',
       });
 
-      this.logger.log('🎉 ĐÃ TẠO ADMIN THÀNH CÔNG! (User: admin | Pass: 7816404122Tan)');
+      this.logger.log(
+        '🎉 ĐÃ TẠO ADMIN THÀNH CÔNG! (User: admin | Pass: 7816404122Tan)',
+      );
     } catch (error) {
       this.logger.error('❌ Lỗi khi tạo Admin: ' + error.message);
     }
@@ -49,5 +55,14 @@ export class AuthService implements OnModuleInit {
       return result;
     }
     return null;
+  }
+
+  // 4. HÀM LOGIN MỚI (TẠO JWT)
+  async login(user: any) {
+    const payload = { username: user.username, sub: user.id, role: user.role };
+    return {
+      access_token: this.jwtService.sign(payload), // Tạo chuỗi mã hóa
+      user: user, // Trả kèm thông tin user để hiển thị
+    };
   }
 }
