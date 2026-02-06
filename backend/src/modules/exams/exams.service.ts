@@ -103,12 +103,17 @@ export class ExamsService {
     const encryptedToken = this.vdiService.generateGuacamoleToken(allocatedVm);
 
     // 7. TRẢ VỀ KẾT QUẢ
+    const nodeIndex =
+      Number(process.env.BACKEND_NODE_INDEX) >= 0
+        ? Number(process.env.BACKEND_NODE_INDEX)
+        : userId % 3;
     return {
         message: 'Vào thi thành công',
         examName: exam.name,
         startTime: exam.startTime,
         endTime: exam.endTime,
         connectionToken: encryptedToken,
+        ws_path: `/guaclite${nodeIndex}`,
         vmInfo: {
           ip: allocatedVm.ip,
           username: allocatedVm.username

@@ -58,6 +58,7 @@ services:
       - DB_PASSWORD=${DB_PASSWORD} # Lấy 7816404122SOT từ .env
       - DB_DATABASE=${DB_NAME}     # Lấy vdi_portal_db từ .env
       - GUAC_CRYPT_KEY=${GUAC_CRYPT_KEY}
+      - BACKEND_NODE_INDEX=0
       - GUACD_HOST=101.47.159.90   # Worker 1
     depends_on:
       - postgres
@@ -77,6 +78,7 @@ services:
       - DB_PASSWORD=${DB_PASSWORD}
       - DB_DATABASE=${DB_NAME}
       - GUAC_CRYPT_KEY=${GUAC_CRYPT_KEY}
+      - BACKEND_NODE_INDEX=1
       - GUACD_HOST=101.47.159.85   # Worker 2
     depends_on:
       - postgres
@@ -96,6 +98,7 @@ services:
       - DB_PASSWORD=${DB_PASSWORD}
       - DB_DATABASE=${DB_NAME}
       - GUAC_CRYPT_KEY=${GUAC_CRYPT_KEY}
+      - BACKEND_NODE_INDEX=2
       - GUACD_HOST=101.47.159.88   # Worker 3
     depends_on:
       - postgres

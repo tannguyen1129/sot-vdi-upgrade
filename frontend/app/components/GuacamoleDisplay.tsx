@@ -253,7 +253,7 @@ export default function GuacamoleDisplay({ token, wsPath, isLocked = false, onAc
       const height = Math.floor(rect.height);
 
       const params = new URLSearchParams({
-        token, // Token gửi lại ở handshake body (tùy chỉnh server guacamole-lite)
+        token, // Token used by guacamole-lite dynamic routing
         width: String(width),
         height: String(height),
         dpi: "96" 

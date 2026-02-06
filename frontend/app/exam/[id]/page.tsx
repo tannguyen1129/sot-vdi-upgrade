@@ -119,9 +119,8 @@ export default function ExamPage() {
                 vmInfo: res.data.vmInfo || { ip: "Unknown", username: "Unknown" }
             });
 
-            const nodeIndex = user.id % 3; 
-            const path = res.data.ws_path || `/guaclite${nodeIndex}`;
-            setWsPath(path)
+            const path = res.data.ws_path || `/guaclite`;
+            setWsPath(path);
         }
     } catch (err: any) {
         const msg = err.response?.data?.message || "Lỗi kết nối đến máy chủ thi.";
