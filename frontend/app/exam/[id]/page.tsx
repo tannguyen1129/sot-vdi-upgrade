@@ -142,6 +142,14 @@ export default function ExamPage() {
 
   // TRƯỜNG HỢP 1: ĐÃ CÓ SESSION (Đã Join thành công) -> VÀO GIAO DIỆN THI
   if (examSession && user && exam) {
+
+    const rawEndTime = exam.endTime || exam.end_time || exam.endDate;
+
+    console.log("DEBUG TIME:", {
+        raw: rawEndTime,
+        parsed: new Date(rawEndTime).getTime(),
+        now: new Date().getTime()
+    });
     
     // Tạo object StudentInfo đầy đủ các trường mới
     const studentInfo: StudentInfo = {
@@ -157,7 +165,7 @@ export default function ExamPage() {
         // [MỚI] Username máy ảo (Lấy từ kết quả Join)
         vmUsername: examSession.vmInfo.username,
         
-        timeLeft: calculateTimeLeft(exam.endTime)
+        timeLeft: calculateTimeLeft(rawEndTime)
     };
 
     return (
