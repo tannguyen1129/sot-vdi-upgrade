@@ -1,191 +1,123 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
-import { Cron, CronExpression } from '@nestjs/schedule'; // Import chuẩn từ NestJS
+import { Injectable, Logger, InternalServerErrorException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import Redis from 'ioredis';
+import Docker from 'dockerode';
 import * as crypto from 'crypto';
-
-// Import Entities
-import { Vm } from '../../entities/vm.entity';
-import { ExamLog } from '../../entities/exam-log.entity';
 
 @Injectable()
 export class VdiService {
-  private readonly guacCypher = 'AES-256-CBC';
-  private readonly guacKey = process.env.GUAC_CRYPT_KEY || 'MySuperSecretKeyForEncryption123';
   private readonly logger = new Logger(VdiService.name);
+  private redis: Redis;
+  private docker: Docker;
+  
+  // [FIX] Cấu hình mã hóa chuẩn
+  private readonly algorithm = 'aes-256-cbc';
+  // Key 32 bytes cố định
+  private readonly key = Buffer.from('12345678901234567890123456789012', 'utf8');
 
-  // Biến static để lưu instance Guacamole Server (được set từ main.ts)
-  public static guacamoleServerInstance: any = null;
-
-  constructor(
-    @InjectRepository(Vm)
-    private vmRepo: Repository<Vm>,
-
-    // [QUAN TRỌNG] Inject Repository của ExamLog vào đây để dùng được trong hàm Cron
-    @InjectRepository(ExamLog)
-    private examLogRepo: Repository<ExamLog>,
-  ) {}
-
-  // --- TỰ ĐỘNG THU HỒI MÁY TREO (Mỗi phút chạy 1 lần) ---
-  @Cron(CronExpression.EVERY_MINUTE)
-  async autoReleaseIdleVms() {
-    this.logger.debug('[Cron] Đang quét máy ảo treo...');
-
-    // 1. Lấy danh sách máy ảo đang cấp phát (isAllocated = true)
-    const activeVms = await this.vmRepo.find({ 
-      where: { isAllocated: true } 
+  constructor(private configService: ConfigService) {
+    this.redis = new Redis({
+      host: this.configService.get('REDIS_HOST') || 'umt_redis',
+      port: 6379,
     });
+    this.docker = new Docker({ socketPath: '/var/run/docker.sock' });
+  }
 
-    if (activeVms.length === 0) return;
+  // --- HÀM 1: CẤP PHÁT MÁY THI ---
+  async allocateContainer(userId: number, examId: number): Promise<{ ip: string; containerId: string }> {
+    const containerName = `exam_${examId}_u${userId}`;
+    const imageName = 'sot-exam-linux:latest';
 
-    // 2. Duyệt từng máy để kiểm tra sự sống
-    for (const vm of activeVms) {
-      if (!vm.allocatedToUserId) continue;
+    this.logger.log(`🚀 [VDI] Allocating ${containerName}...`);
 
-      // Tìm log hoạt động cuối cùng của user này
-      const lastLog = await this.examLogRepo.findOne({
-        where: { userId: vm.allocatedToUserId },
-        order: { createdAt: 'DESC' }, // Lấy cái mới nhất
+    try {
+      const networks = await this.docker.listNetworks();
+      const examNetObj = networks.find(n => n.Name.includes('exam_net'));
+      if (!examNetObj) throw new Error('Không tìm thấy mạng exam_net!');
+      const networkName = examNetObj.Name;
+
+      try {
+        const oldContainer = this.docker.getContainer(containerName);
+        await oldContainer.remove({ force: true });
+      } catch (e) { }
+
+      const newContainer = await this.docker.createContainer({
+        Image: imageName,
+        name: containerName,
+        HostConfig: {
+          NetworkMode: networkName,
+          AutoRemove: true,
+          Memory: 1024 * 1024 * 1024,
+          NanoCpus: 1000000000,
+        },
+        Env: [`VNC_PW=123456`]
       });
 
-      // 3. Logic kiểm tra thời gian
-      const now = new Date();
-      // Timeout là 10 phút (Nếu không có hoạt động gì trong 10p sẽ bị thu hồi)
-      const timeoutThreshold = new Date(now.getTime() - 10 * 60 * 1000);
+      await newContainer.start();
+      
+      // Chờ VNC Server khởi động
+      await new Promise(resolve => setTimeout(resolve, 3000));
 
-      // Điều kiện thu hồi:
-      // - Case 1: Không có log nào (Vào thi nhưng không load được trang hoặc tắt ngay lập tức)
-      // - Case 2: Log cuối cùng cũ hơn 10 phút (Đã tắt trình duyệt nghỉ thi)
-      if (!lastLog || lastLog.createdAt < timeoutThreshold) {
-        this.logger.warn(`[AUTO-CLEANUP] Thu hồi máy ${vm.ip} của User ${vm.allocatedToUserId} do không hoạt động > 10 phút.`);
-        
-        // Gọi hàm thu hồi (Hàm này nằm ở phần dưới của file)
-        await this.revokeVmConnection(vm.allocatedToUserId);
+      const data = await newContainer.inspect();
+      const ip = data.NetworkSettings.Networks[networkName]?.IPAddress;
+
+      if (!ip) {
+         const anyNet = Object.values(data.NetworkSettings.Networks)[0] as any;
+         if (anyNet?.IPAddress) return { ip: anyNet.IPAddress, containerId: newContainer.id };
+         throw new Error('Container started but NO IP found.');
       }
+
+      this.logger.log(`✅ [VDI] Ready: ${containerName} -> ${ip}`);
+      return { ip, containerId: newContainer.id };
+
+    } catch (error) {
+      this.logger.error(`❌ [VDI Error] ${error.message}`);
+      throw new InternalServerErrorException(error.message);
     }
   }
 
-  async allocateVm(userId: number): Promise<Vm> {
-    let vm = await this.vmRepo.findOne({ where: { allocatedToUserId: userId } });
-    if (vm) return vm;
-
-    vm = await this.vmRepo.findOne({
-      where: { isAllocated: false },
-      order: { port: 'ASC' },
-    });
-
-    if (!vm) throw new NotFoundException('Hết máy ảo.');
-
-    vm.isAllocated = true;
-    vm.allocatedToUserId = userId;
-    await this.vmRepo.save(vm);
-
-    return vm;
-  }
-
-generateGuacamoleToken(vm: Vm): string {
+  // --- HÀM 2: TẠO TOKEN KẾT NỐI ---
+  async generateConnectionToken(userId: number, targetIp: string): Promise<string> {
     const connectionParams = {
-      connection: {
-        type: 'rdp',
+        type: 'vnc',
         settings: {
-          hostname: vm.ip,
-          port: String(vm.port),
-          username: vm.username,
-          password: vm.password,
-          security: 'nla',
-          'ignore-cert': true,
-
-          // --- CẤU HÌNH HÌNH ẢNH (GIỮ NGUYÊN) ---
-          'disable-gfx': false, 
-          'color-depth': 32,
-          'resize-method': 'display-update',
-          'enable-wallpaper': true,   
-          'enable-theming': true,
-          'enable-font-smoothing': true,
-          'enable-menu-animations': true,
-          'enable-desktop-composition': true,
-
-          // --- [FIX QUAN TRỌNG] TẮT AUDIO ĐỂ TRÁNH SẬP SOCKET ---
-          // Thêm 2 dòng này vào:
-          'disable-audio': true, 
-          'enable-audio-input': false, 
-
-          // Tắt cache để tránh rác
-          'disable-bitmap-caching': true,
-          'disable-offscreen-caching': true,
-          'disable-glyph-caching': true,
-
-          dpi: 96,
-          'server-layout': 'en-us-qwerty',
-        },
-      },
+            hostname: targetIp,
+            port: '5901',
+            password: '123456',
+            'ignore-cert': 'true', // Lưu ý: để string 'true' cho chắc
+            'disable-audio': 'true'
+        }
     };
 
-    return this.encryptGuacamoleToken(connectionParams);
-  }
-
-  private encryptGuacamoleToken(payload: object): string {
-    const iv = crypto.randomBytes(16);
-    const cipher = crypto.createCipheriv(this.guacCypher, this.guacKey, iv);
-    const encrypted = Buffer.concat([
-      cipher.update(JSON.stringify(payload), 'utf8'),
-      cipher.final(),
-    ]);
-
-    const tokenData = {
-      iv: iv.toString('base64'),
-      value: encrypted.toString('base64'),
-    };
-
-    return Buffer.from(JSON.stringify(tokenData)).toString('base64');
-  }
-
-  async releaseVm(userId: number) {
-    const vm = await this.vmRepo.findOne({ where: { allocatedToUserId: userId } });
-    if (vm) {
-      vm.isAllocated = false;
-      vm.allocatedToUserId = null;
-      await this.vmRepo.save(vm);
-    }
-  }
-
-  // --- HÀM THU HỒI MÁY ẢO ---
-  async revokeVmConnection(userId: number) {
-    // 1. Tìm VM đang cấp cho User này
-    const vm = await this.vmRepo.findOne({ where: { allocatedToUserId: userId } });
+    // Mã hóa
+    const guacToken = this.encrypt(JSON.stringify(connectionParams));
     
-    if (!vm) return; // User không có máy ảo nào
+    // Log kiểm tra
+    this.logger.log(`🔒 Encrypted Token: ${guacToken.substring(0, 15)}...`);
 
-    // --- [PHẦN MỚI QUAN TRỌNG] GHI LOG HỆ THỐNG ---
-    // Mục đích: Để Admin thấy dòng chữ màu đỏ "REVOKE" trên màn hình giám sát
+    const sessionId = crypto.randomUUID();
+    await this.redis.set(`vdi:auth:${sessionId}`, JSON.stringify({ token: guacToken }), 'EX', 30);
+
+    return guacToken; 
+  }
+
+  // --- HÀM 3: MÃ HÓA ĐƠN GIẢN HÓA ---
+  private encrypt(text: string): string {
+    // [DEBUG MODE] Không mã hóa, chỉ encode Base64 để truyền đi
+    return Buffer.from(text).toString('base64');
+  }
+
+  // ... (giữ nguyên các hàm khác)
+  async retrieveTokenFromRedis(sessionId: string): Promise<string | null> {
+    const data = await this.redis.get(`vdi:auth:${sessionId}`);
+    return data ? JSON.parse(data).token : null;
+  }
+
+  async destroyContainer(userId: number, examId: number) {
+    const containerName = `exam_${examId}_u${userId}`;
     try {
-        await this.examLogRepo.save({
-            userId: userId,
-            action: 'REVOKE', 
-            details: `Hệ thống tự động thu hồi máy ${vm.ip} do treo quá 10 phút.`,
-            clientIp: 'SYSTEM'
-        });
-    } catch (e) {
-        // Chỉ log lỗi ra console, không chặn quy trình thu hồi
-        this.logger.error(`Không thể ghi log REVOKE cho user ${userId}: ${e.message}`);
-    }
-
-    // 2. Ngắt kết nối Guacamole (Nếu có implement)
-    if (VdiService.guacamoleServerInstance) {
-        // console.log(`[VDI] Đóng socket Guacamole của User ${userId}`);
-        // VdiService.guacamoleServerInstance.closeConnection(userId); 
-    }
-
-    // 3. Gọi Proxmox API để tắt máy ảo (Nếu có implement)
-    if (vm.vmid) {
-       // console.log(`[VDI] Đang tắt Proxmox VM ID: ${vm.vmid}`);
-       // await this.proxmoxService.stopVm(vm.vmid); 
-    }
-
-    // 4. Giải phóng máy ảo trong Database (Reset isAllocated = false)
-    // Hàm này bạn đã có ở dưới, tái sử dụng luôn
-    await this.releaseVm(userId);
-    
-    this.logger.log(`[VDI] Đã thu hồi thành công máy ${vm.ip} của User ${userId}`);
+      const container = this.docker.getContainer(containerName);
+      await container.stop();
+    } catch (e) {}
   }
 }

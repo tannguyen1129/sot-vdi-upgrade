@@ -14,9 +14,24 @@ export default function ExamLobby({ exam, user, onJoin, loading, error }: LobbyP
 
     // Xử lý khi nhấn Enter
     const handleKeyDown = (e: React.KeyboardEvent) => {
-        if (e.key === 'Enter') {
+        if (e.key === 'Enter' && code) {
             onJoin(code);
         }
+    };
+
+    // Định dạng ngày giờ
+    const formatDate = (dateString: string) => {
+        if (!dateString) return '--:--';
+        try {
+            return new Date(dateString).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
+        } catch { return '--:--'; }
+    };
+
+    const formatDay = (dateString: string) => {
+        if (!dateString) return '';
+        try {
+            return new Date(dateString).toLocaleDateString('vi-VN');
+        } catch { return ''; }
     };
 
     return (
@@ -38,7 +53,7 @@ export default function ExamLobby({ exam, user, onJoin, loading, error }: LobbyP
                         </div>
                         <div>
                             <p className="text-xs font-bold text-slate-400 uppercase tracking-widest">Thí sinh</p>
-                            <h2 className="text-lg font-bold text-slate-800">{user?.fullName}</h2>
+                            <h2 className="text-lg font-bold text-slate-800">{user?.fullName || "Sinh Viên"}</h2>
                             <p className="text-xs font-mono text-blue-600 font-bold bg-blue-50 inline-block px-1 mt-0.5 border border-blue-100">
                                 {user?.username}
                             </p>
@@ -69,19 +84,19 @@ export default function ExamLobby({ exam, user, onJoin, loading, error }: LobbyP
                         <div className="border border-slate-200 p-4 bg-slate-50 text-center group hover:border-blue-300 transition-colors">
                             <p className="text-xs font-bold text-slate-400 uppercase mb-1">Thời gian bắt đầu</p>
                             <p className="text-xl font-mono font-bold text-slate-700">
-                                {exam?.startTime ? new Date(exam.startTime).toLocaleTimeString('vi-VN', {hour: '2-digit', minute:'2-digit'}) : '--:--'}
+                                {formatDate(exam?.startTime)}
                             </p>
                             <p className="text-[10px] text-slate-400">
-                                {exam?.startTime ? new Date(exam.startTime).toLocaleDateString('vi-VN') : ''}
+                                {formatDay(exam?.startTime)}
                             </p>
                         </div>
                         <div className="border border-slate-200 p-4 bg-slate-50 text-center group hover:border-blue-300 transition-colors">
                             <p className="text-xs font-bold text-slate-400 uppercase mb-1">Thời gian kết thúc</p>
                             <p className="text-xl font-mono font-bold text-slate-700">
-                                {exam?.endTime ? new Date(exam.endTime).toLocaleTimeString('vi-VN', {hour: '2-digit', minute:'2-digit'}) : '--:--'}
+                                {formatDate(exam?.endTime)}
                             </p>
                             <p className="text-[10px] text-slate-400">
-                                {exam?.endTime ? new Date(exam.endTime).toLocaleDateString('vi-VN') : ''}
+                                {formatDay(exam?.endTime)}
                             </p>
                         </div>
                     </div>
@@ -110,7 +125,7 @@ export default function ExamLobby({ exam, user, onJoin, loading, error }: LobbyP
                                     <svg className="h-5 w-5 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="square" strokeLinejoin="miter" strokeWidth={2} d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" /></svg>
                                 </div>
                                 <input 
-                                    type="text" // Để text cho dễ nhìn, có thể đổi thành password nếu muốn bảo mật cao
+                                    type="text" 
                                     value={code}
                                     onChange={(e) => setCode(e.target.value)}
                                     onKeyDown={handleKeyDown}
@@ -122,7 +137,7 @@ export default function ExamLobby({ exam, user, onJoin, loading, error }: LobbyP
 
                         {/* Error Message */}
                         {error && (
-                            <div className="flex items-center gap-2 text-red-600 bg-red-50 p-3 border border-red-200">
+                            <div className="flex items-center gap-2 text-red-600 bg-red-50 p-3 border border-red-200 animate-pulse">
                                 <svg className="w-5 h-5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="square" strokeLinejoin="miter" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
                                 <span className="text-sm font-bold">{error}</span>
                             </div>
@@ -132,7 +147,7 @@ export default function ExamLobby({ exam, user, onJoin, loading, error }: LobbyP
                         <button 
                             onClick={() => onJoin(code)}
                             disabled={loading || !code}
-                            className={`w-full py-4 px-6 font-bold text-sm uppercase tracking-widest text-white transition-all duration-200 flex items-center justify-center gap-3 shadow-lg
+                            className={`w-full py-4 px-6 font-bold text-sm uppercase tracking-widest text-white transition-all duration-200 flex items-center justify-center gap-3 shadow-lg rounded-sm
                                 ${loading || !code
                                     ? 'bg-slate-400 cursor-not-allowed shadow-none' 
                                     : 'bg-blue-700 hover:bg-blue-800 shadow-blue-900/20 active:translate-y-0.5'

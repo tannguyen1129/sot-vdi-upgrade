@@ -1,7 +1,20 @@
 version: '3.8'
 
 services:
-  # 1. Nginx Gateway (Load Balancer & SSL Termination)
+  # ----------------------------------------------------
+  # 1. REDIS (MỚI: Bộ nhớ đệm cho Session & Token)
+  # ----------------------------------------------------
+  redis:
+    image: redis:alpine
+    container_name: umt_redis
+    restart: always
+    command: redis-server --appendonly yes
+    networks:
+      - vdi_net
+
+  # ----------------------------------------------------
+  # 2. NGINX GATEWAY
+  # ----------------------------------------------------
   nginx:
     image: nginx:alpine
     container_name: umt_nginx
@@ -14,109 +27,109 @@ services:
       - ./certbot/conf:/etc/letsencrypt
       - ./certbot/www:/var/www/certbot
     depends_on:
+      - backend
       - frontend
-      - backend-1
-      - backend-2
-      - backend-3
     networks:
       - vdi_net
 
-  # Service Certbot (Tự động gia hạn SSL)
+  # ----------------------------------------------------
+  # 3. CERTBOT (MỚI: Tự động gia hạn SSL)
+  # ----------------------------------------------------
   certbot:
-    image: certbot/certbot
+    image: certbot/certbot:latest
     container_name: umt_certbot
+    restart: always
     volumes:
       - ./certbot/conf:/etc/letsencrypt
       - ./certbot/www:/var/www/certbot
+    entrypoint: "/bin/sh -c 'trap exit TERM; while :; do certbot renew; sleep 12h & wait $${!}; done;'"
+    networks:
+      - vdi_net
 
-  postgres: # Tên service
+  # ----------------------------------------------------
+  # 4. GUACD SERVICE (Trái tim xử lý hình ảnh)
+  # ----------------------------------------------------
+  guacd:
+    build: ./guacd-custom
+    container_name: umt_guacd
+    restart: always
+    env_file: .env
+    expose:
+      - "4822"
+    networks:
+      - vdi_net   # Để Backend kết nối tới
+      - exam_net  # [QUAN TRỌNG] Để nối vào máy thi trong vùng cách ly
+    deploy:
+      resources:
+        limits:
+          memory: 8G
+          cpus: '4.0'
+
+  # ----------------------------------------------------
+  # 5. DATABASE
+  # ----------------------------------------------------
+  postgres:
     image: postgres:15-alpine
-    container_name: umt_db # Tên container (khớp với DB_HOST trong .env)
+    container_name: umt_db
     restart: always
     env_file: .env
     environment:
       POSTGRES_USER: ${DB_USER}
       POSTGRES_PASSWORD: ${DB_PASSWORD}
       POSTGRES_DB: ${DB_NAME}
+      POSTGRES_INITDB_ARGS: "--max_connections=1000"
     volumes:
       - ./data/postgres:/var/lib/postgresql/data
     networks:
       - vdi_net
 
-  # 3. Backend Cluster (3 Nodes)
-  
-  # --- Backend 1 -> Worker 1 (101.47.159.90) ---
-  backend-1:
+  # ----------------------------------------------------
+  # 6. BACKEND API (Bộ não điều khiển Docker)
+  # ----------------------------------------------------
+  backend:
     build: ./backend
-    container_name: umt_backend_1
+    container_name: umt_backend
     restart: always
     env_file: .env
     environment:
-      - DB_HOST=${DB_HOST}         # Lấy umt_db từ .env
-      - DB_PORT=${DB_PORT}         # Lấy 5432 từ .env
-      - DB_USERNAME=${DB_USER}     # Lấy umt_user từ .env
-      - DB_PASSWORD=${DB_PASSWORD} # Lấy 7816404122SOT từ .env
-      - DB_DATABASE=${DB_NAME}     # Lấy vdi_portal_db từ .env
-      - GUAC_CRYPT_KEY=${GUAC_CRYPT_KEY}
-      - BACKEND_NODE_INDEX=0
-      - GUACD_HOST=101.47.159.90   # Worker 1
+      - DB_HOST=umt_db
+      - DB_PORT=5432
+      - REDIS_HOST=umt_redis  # Kết nối Redis
+      - REDIS_PORT=6379
+      - GUACD_HOST=umt_guacd
+      - GUACD_PORT=4822
+    volumes:
+      # [CỰC KỲ QUAN TRỌNG] Cho phép Backend điều khiển Docker Host để tạo máy thi
+      - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
       - postgres
+      - guacd
+      - redis
     networks:
       - vdi_net
 
-  # --- Backend 2 -> Worker 2 (101.47.159.85) ---
-  backend-2:
-    build: ./backend
-    container_name: umt_backend_2
-    restart: always
-    env_file: .env
-    environment:
-      - DB_HOST=${DB_HOST}
-      - DB_PORT=${DB_PORT}
-      - DB_USERNAME=${DB_USER}
-      - DB_PASSWORD=${DB_PASSWORD}
-      - DB_DATABASE=${DB_NAME}
-      - GUAC_CRYPT_KEY=${GUAC_CRYPT_KEY}
-      - BACKEND_NODE_INDEX=1
-      - GUACD_HOST=101.47.159.85   # Worker 2
-    depends_on:
-      - postgres
-    networks:
-      - vdi_net
-
-  # --- Backend 3 -> Worker 3 (101.47.159.88) ---
-  backend-3:
-    build: ./backend
-    container_name: umt_backend_3
-    restart: always
-    env_file: .env
-    environment:
-      - DB_HOST=${DB_HOST}
-      - DB_PORT=${DB_PORT}
-      - DB_USERNAME=${DB_USER}
-      - DB_PASSWORD=${DB_PASSWORD}
-      - DB_DATABASE=${DB_NAME}
-      - GUAC_CRYPT_KEY=${GUAC_CRYPT_KEY}
-      - BACKEND_NODE_INDEX=2
-      - GUACD_HOST=101.47.159.88   # Worker 3
-    depends_on:
-      - postgres
-    networks:
-      - vdi_net
-
-  # 4. Frontend Client
+  # ----------------------------------------------------
+  # 7. FRONTEND
+  # ----------------------------------------------------
   frontend:
     build: ./frontend
     container_name: umt_frontend
     restart: always
     env_file: .env
+    depends_on:
+      - backend
     networks:
       - vdi_net
 
-# --- CẤU HÌNH MẠNG ---
+# ----------------------------------------------------
+# NETWORK CONFIGURATION
+# ----------------------------------------------------
 networks:
-  vdi_net:
+  vdi_net: # Mạng quản lý (Backend <-> Guacd <-> DB)
     driver: bridge
     driver_opts:
       com.docker.network.driver.mtu: "1350"
+  
+  exam_net: # Mạng máy thi (Guacd <-> Exam Containers)
+    driver: bridge
+    # Mạng này sẽ được áp dụng Firewall Rule để chặn Internet

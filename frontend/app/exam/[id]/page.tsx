@@ -2,19 +2,19 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
-import api from "./../../utils/axios";
+import api from "../../utils/axios"; // Đảm bảo đường dẫn import đúng
 
 import ExamLobby from "./components/ExamLobby";
-// Import Interface StudentInfo để đảm bảo type-safe
-import ExamInterface, { StudentInfo } from "../../components/ExamInterface"; 
+import ExamMachine from "./components/ExamMachine";
 
 // Interface cho dữ liệu phiên thi trả về từ Backend API /join
 interface ExamSessionData {
   connectionToken: string;
   vmInfo: {
     ip: string;
-    username: string; // [MỚI] Tên user của máy ảo (vd: Administrator, Lab01)
+    username: string;
   };
+  wsPath?: string; // Thêm wsPath nếu backend trả về
 }
 
 export default function ExamPage() {
@@ -32,111 +32,98 @@ export default function ExamPage() {
   const [exam, setExam] = useState<any>(null);
   
   // Lưu session gồm Token và Info máy ảo sau khi Join thành công
-  const [examSession, setExamSession] = useState<ExamSessionData | null>(null);
+  // Quan trọng: token chính là chìa khóa để render ExamMachine
+  const [token, setToken] = useState<string | null>(null);
   const [wsPath, setWsPath] = useState<string>("");
   
-  const [clientIp, setClientIp] = useState<string>("Đang lấy IP...");
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState("");
   const [isReady, setIsReady] = useState(false);
 
-  // 1. Lấy IP thực của máy thí sinh (Client IP)
+  // 1. Bootstrap: Load User & Thông tin kỳ thi
   useEffect(() => {
-    const fetchClientIp = async () => {
+    let cancelled = false;
+    const bootstrap = async () => {
       try {
-        const response = await fetch('https://api.ipify.org?format=json');
-        const data = await response.json();
-        setClientIp(data.ip);
+        const userStr = localStorage.getItem("user");
+        const accessToken = localStorage.getItem("accessToken") || (userStr ? JSON.parse(userStr).accessToken : null);
+
+        if (!userStr || !accessToken) { 
+          console.log("Thiếu User hoặc Token, đá về Login");
+          router.push("/login");
+          return;
+        }
+        
+        const localUser = JSON.parse(userStr);
+        if (!cancelled) setUser(localUser);
+
+        // --- GẮN TOKEN VÀO HEADER ---
+        api.defaults.headers.common['Authorization'] = `Bearer ${accessToken}`;
+
+        if (!examId) {
+          router.push("/dashboard");
+          return;
+        }
+
+        const res = await api.get(`/exams/${examId}`);
+        if (!cancelled) {
+          setExam(res.data);
+          setIsReady(true);
+        }
       } catch (err) {
-        console.error("Failed to fetch Client IP:", err);
-        setClientIp("Unknown IP");
+        console.error("Lỗi tải đề thi:", err);
+        router.push("/dashboard");
       }
     };
-    fetchClientIp();
-  }, []);
+    bootstrap();
+    return () => { cancelled = true; };
+  }, [examId, router]);
 
-  // 2. Bootstrap: Load User & Thông tin kỳ thi
-  useEffect(() => {
-  let cancelled = false;
-  const bootstrap = async () => {
-    try {
-      const userStr = localStorage.getItem("user");
-      
-      // [QUAN TRỌNG] Lấy token từ localStorage (hoặc từ object user nếu bác lưu trong đó)
-      // Bác kiểm tra lại lúc Login bác lưu token tên là gì nhé (thường là accessToken hoặc access_token)
-      const token = localStorage.getItem("accessToken") || (userStr ? JSON.parse(userStr).accessToken : null);
-
-      if (!userStr || !token) { 
-        console.log("Thiếu User hoặc Token, đá về Login");
-        router.push("/login");
-        return;
-      }
-      
-      const localUser = JSON.parse(userStr);
-      if (!cancelled) setUser(localUser);
-
-      // --- [FIX CHÍNH] GẮN TOKEN VÀO ĐẦU MỌI REQUEST ---
-      api.defaults.headers.common['Authorization'] = `Bearer ${token}`;
-      // -------------------------------------------------
-
-      if (!examId) {
-        router.push("/dashboard");
-        return;
-      }
-
-      // Giờ gọi API mới không bị 401
-      const res = await api.get(`/exams/${examId}`);
-      if (!cancelled) {
-        setExam(res.data);
-        setIsReady(true);
-      }
-    } catch (err) {
-      console.error("Lỗi tải đề thi:", err);
-      // Nếu lỗi quá nặng thì mới về dashboard
-      router.push("/dashboard");
-    }
-  };
-  bootstrap();
-  return () => { cancelled = true; };
-}, [examId, router]);
-
-  // 3. Xử lý Join Exam (Gọi API Backend)
+  // 2. Xử lý Join Exam (Gọi API Backend 1 lần duy nhất)
   const handleJoin = async (accessCode: string) => {
     if (!user?.id) return;
     setLoading(true);
     setErrorMsg("");
 
     try {
+        console.log(`[ExamPage] Joining exam ${examId}...`);
         // Gọi API Backend: POST /exams/:id/join
         const res = await api.post(`/exams/${examId}/join`, { 
             userId: user.id, 
             accessCode 
         });
 
-        if (res.data?.connectionToken) {
-            setExamSession({
-                connectionToken: res.data.connectionToken,
-                vmInfo: res.data.vmInfo || { ip: "Unknown", username: "Unknown" }
-            });
+        // Backend trả về: { token: "...", ip: "...", type: "vnc" } hoặc structure cũ
+        // Ta map lại cho chuẩn
+        const connectionToken = res.data.token || res.data.connectionToken;
+        const wsPath = res.data.ws_path || `/guaclite`;
+        // Kiểm tra xem wsPath có bị dính 'undefined' không
+        console.log("WS Path received:", wsPath); 
+        setWsPath(wsPath);
 
-            const path = res.data.ws_path || `/guaclite`;
-            setWsPath(path);
+        if (connectionToken) {
+            console.log("[ExamPage] Join success! Token received.");
+            setWsPath(wsPath);
+            setToken(connectionToken); // Set token -> Chuyển sang màn hình thi
+        } else {
+            setErrorMsg("Lỗi: Server không trả về Token kết nối.");
         }
     } catch (err: any) {
-        const msg = err.response?.data?.message || "Lỗi kết nối đến máy chủ thi.";
-        setErrorMsg(msg);
+        console.error("[ExamPage] Join error:", err);
+        const serverMsg = err.response?.data?.message;
+        const msg = Array.isArray(serverMsg) ? serverMsg[0] : (serverMsg || "Lỗi kết nối đến máy chủ thi.");
+        setErrorMsg(`🛑 ${msg}`);
     } finally {
         setLoading(false);
     }
   };
 
-  // Helper tính thời gian còn lại (seconds)
-  const calculateTimeLeft = (endTimeStr: string) => {
-    if (!endTimeStr) return 0;
-    const now = new Date().getTime();
-    const end = new Date(endTimeStr).getTime();
-    const diff = Math.floor((end - now) / 1000);
-    return diff > 0 ? diff : 0;
+  const handleExitExam = () => {
+      // Xử lý nộp bài hoặc thoát
+      if (confirm("Bạn có chắc muốn thoát và nộp bài?")) {
+          // Gọi API finish nếu cần
+          router.push("/dashboard");
+      }
   };
 
   // --- RENDER ---
@@ -150,46 +137,19 @@ export default function ExamPage() {
     );
   }
 
-  // TRƯỜNG HỢP 1: ĐÃ CÓ SESSION (Đã Join thành công) -> VÀO GIAO DIỆN THI
-  if (examSession && user && exam) {
-
-    const rawEndTime = exam.endTime || exam.end_time || exam.endDate;
-
-    console.log("DEBUG TIME:", {
-        raw: rawEndTime,
-        parsed: new Date(rawEndTime).getTime(),
-        now: new Date().getTime()
-    });
-    
-    // Tạo object StudentInfo đầy đủ các trường mới
-    const studentInfo: StudentInfo = {
-        name: user.fullName || user.username,
-        username: user.username, // MSSV
-        className: user.className || "N/A", // Lớp
-        department: user.department || "Khoa Công Nghệ", 
-        
-        clientIp: clientIp,
-        
-        vmIp: examSession.vmInfo.ip,
-        
-        // [MỚI] Username máy ảo (Lấy từ kết quả Join)
-        vmUsername: examSession.vmInfo.username,
-        
-        timeLeft: calculateTimeLeft(rawEndTime)
-    };
-
+  // TRƯỜNG HỢP 1: ĐÃ CÓ TOKEN (Đã Join thành công) -> VÀO MÁY THI
+  if (token && user && exam) {
     return (
-      <ExamInterface 
-        token={examSession.connectionToken} 
-        studentInfo={studentInfo}
-        examId={exam.id}
-        userId={user.id}
+      <ExamMachine 
+        examName={exam.name}
+        token={token}
         wsPath={wsPath}
+        onExit={handleExitExam}
       />
     );
   }
 
-  // TRƯỜNG HỢP 2: CHƯA CÓ SESSION -> Ở SẢNH CHỜ (LOBBY)
+  // TRƯỜNG HỢP 2: CHƯA CÓ TOKEN -> Ở SẢNH CHỜ (LOBBY)
   return (
     <div className="min-h-screen bg-gray-50">
       <ExamLobby

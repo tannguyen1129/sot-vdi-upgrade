@@ -1,34 +1,40 @@
-import { Controller, Get, Query, Post, Body, HttpException, HttpStatus } from '@nestjs/common';
+import { Controller, Post, UseGuards, Request, Body } from '@nestjs/common';
 import { VdiService } from './vdi.service';
+import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 
 @Controller('vdi')
 export class VdiController {
   constructor(private readonly vdiService: VdiService) {}
 
-  // API lấy Token để kết nối
-  @Get('connect')
-async connect(@Query('userId') userId: string) {
-    if (!userId) throw new HttpException('Thiếu UserId', HttpStatus.BAD_REQUEST);
-    const uid = Number(userId);
+  @UseGuards(JwtAuthGuard)
+  @Post('allocate')
+  async allocate(@Request() req, @Body() body: { examId?: number }) {
+    const userId = req.user.id;
+    // Lấy examId từ body hoặc mặc định là 1
+    const examId = body.examId || 1;
 
-    const vm = await this.vdiService.allocateVm(uid);
-    const token = this.vdiService.generateGuacamoleToken(vm);
+    // [FIX] 1. Cấp phát Container (Thay thế allocateVm)
+    const { ip } = await this.vdiService.allocateContainer(userId, examId);
 
-    // CHIA TẢI: User ID chia lấy dư cho 3
-    const nodeIndex = uid % 3; 
-    
+    // [FIX] 2. Tạo Token kết nối (Thay thế generateGuacamoleToken)
+    const token = await this.vdiService.generateConnectionToken(userId, ip);
+
     return { 
-        status: 'success',
-        vm_info: { label: vm.username }, 
-        token: token,
-        ws_path: `/guaclite${nodeIndex}` // TRẢ VỀ ĐƯỜNG DẪN CỤ THỂ
+      token,
+      type: 'vnc',
+      ip 
     };
-}
-  
-  // API nhả máy (khi logout)
+  }
+
+  @UseGuards(JwtAuthGuard)
   @Post('release')
-  async release(@Body() body: { userId: number }) {
-      await this.vdiService.releaseVm(body.userId);
-      return { status: 'released' };
+  async release(@Request() req, @Body() body: { examId?: number }) {
+    const userId = req.user.id;
+    const examId = body.examId || 1;
+
+    // [FIX] Thay thế releaseVm bằng destroyContainer
+    await this.vdiService.destroyContainer(userId, examId);
+    
+    return { message: 'Released successfully' };
   }
 }
