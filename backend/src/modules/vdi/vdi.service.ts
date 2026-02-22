@@ -46,7 +46,9 @@ export class VdiService {
         name: containerName,
         HostConfig: {
           NetworkMode: networkName,
-          AutoRemove: true,
+          // [FIX QUAN TRỌNG] Đổi thành false để debug. 
+          // Nếu container crash, nó vẫn nằm đó để ta xem log.
+          AutoRemove: false, 
           Memory: 1024 * 1024 * 1024,
           NanoCpus: 1000000000,
         },
@@ -55,16 +57,38 @@ export class VdiService {
 
       await newContainer.start();
       
-      // Chờ VNC Server khởi động
-      await new Promise(resolve => setTimeout(resolve, 3000));
+      // [FIX] CƠ CHẾ CHỜ VÀ LẤY IP THÔNG MINH
+      let ip: string | null = null;
+      
+      // Thử tối đa 5 lần (tổng 5 giây), nếu có IP thì lấy luôn không cần đợi hết 5s
+      for (let i = 0; i < 5; i++) {
+          await new Promise(resolve => setTimeout(resolve, 1000));
+          const data = await newContainer.inspect();
+          
+          // NẾU CONTAINER BỊ CRASH VÀ EXIT NGAY LẬP TỨC
+          if (data.State.Status === 'exited') {
+              this.logger.error(`❌ Container ${containerName} crashed immediately!`);
+              // Ghi thêm log của container ra console để dễ debug
+              const logs = await newContainer.logs({ stdout: true, stderr: true });
+              console.log("--- DOCKER CRASH LOGS ---");
+              console.log(logs.toString('utf8'));
+              console.log("-------------------------");
+              throw new Error('Máy thi gặp sự cố (Container crashed). Vui lòng báo Giám thị.');
+          }
 
-      const data = await newContainer.inspect();
-      const ip = data.NetworkSettings.Networks[networkName]?.IPAddress;
+          ip = data.NetworkSettings.Networks[networkName]?.IPAddress;
+          
+          // Thử lấy IP từ mạng bất kỳ nếu mạng chỉ định không có
+          if (!ip) {
+             const anyNet = Object.values(data.NetworkSettings.Networks)[0] as any;
+             ip = anyNet?.IPAddress;
+          }
+          
+          if (ip) break; // Thoát vòng lặp ngay khi có IP
+      }
 
       if (!ip) {
-         const anyNet = Object.values(data.NetworkSettings.Networks)[0] as any;
-         if (anyNet?.IPAddress) return { ip: anyNet.IPAddress, containerId: newContainer.id };
-         throw new Error('Container started but NO IP found.');
+         throw new Error('Container started but NO IP found after 5 seconds.');
       }
 
       this.logger.log(`✅ [VDI] Ready: ${containerName} -> ${ip}`);
@@ -79,24 +103,30 @@ export class VdiService {
   // --- HÀM 2: TẠO TOKEN KẾT NỐI ---
   async generateConnectionToken(userId: number, targetIp: string): Promise<string> {
     const connectionParams = {
-        type: 'vnc',
-        settings: {
-            hostname: targetIp,
-            port: '5901',
-            password: '123456',
-            'ignore-cert': 'true', // Lưu ý: để string 'true' cho chắc
-            'disable-audio': 'true'
+        connection: {
+            type: 'rdp',
+            settings: {
+                hostname: targetIp,
+                port: '3389',
+                username: 'student',
+                password: '123456',
+                security: 'any', // <--- Để Guacamole tự đàm phán TLS với xrdp
+                'ignore-cert': 'true',
+                'disable-audio': 'true',
+                'resize-method': 'display-update'
+            }
         }
     };
 
     // Mã hóa
     const guacToken = this.encrypt(JSON.stringify(connectionParams));
     
-    // Log kiểm tra
-    this.logger.log(`🔒 Encrypted Token: ${guacToken.substring(0, 15)}...`);
+    this.logger?.log(`🔒 Encrypted Token: ${guacToken.substring(0, 15)}...`);
 
     const sessionId = crypto.randomUUID();
-    await this.redis.set(`vdi:auth:${sessionId}`, JSON.stringify({ token: guacToken }), 'EX', 30);
+    if (this.redis) {
+        await this.redis.set(`vdi:auth:${sessionId}`, JSON.stringify({ token: guacToken }), 'EX', 30);
+    }
 
     return guacToken; 
   }

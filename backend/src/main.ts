@@ -9,34 +9,21 @@ async function bootstrap() {
   
   // --- 1. OVERRIDE HÀM GIẢI MÃ ---
   ClientConnection.prototype.decryptToken = function () {
+    // Xóa sạch rác DPI và cấu hình ngầm từ Frontend để bảo vệ Token
+    delete this.query.dpi;
+    delete this.query.audio;
+    delete this.query.video;
+    delete this.query.image;
+
     const tokenFromQuery = this.query.token;
-    
-    if (!tokenFromQuery) {
-        // Trả về null để thư viện tự xử lý lỗi, tránh throw crash server
-        console.error("❌ Token missing");
-        return null;
-    }
+    if (!tokenFromQuery) return {};
 
     try {
-      // Decode Base64
       const jsonStr = Buffer.from(tokenFromQuery, 'base64').toString('utf8');
-      const parsed = JSON.parse(jsonStr); 
-
-      // [QUAN TRỌNG] Đảm bảo luôn trả về đúng cấu trúc lồng nhau
-      const connectionObject = {
-          connection: {
-              type: parsed.type || 'vnc',
-              settings: parsed.settings || {} // Nếu thiếu settings, gán rỗng
-          }
-      };
-      
-      return connectionObject;
-
+      return JSON.parse(jsonStr); 
     } catch (e) {
       console.error(`❌ Token Decode Error: ${e.message}`);
-      // Trả về cấu trúc mặc định rỗng để processConnectionSettings xử lý tiếp
-      // thay vì để thư viện crash
-      return { connection: { type: 'vnc', settings: {} } };
+      return {};
     }
   };
 
@@ -47,53 +34,26 @@ async function bootstrap() {
 
   // --- 2. CẤU HÌNH SERVER ---
   const clientOptions = {
-    // Crypt dummy để thư viện vui lòng
-    crypt: {
-      cypher: 'AES-256-CBC',
-      key: '12345678901234567890123456789012' 
-    },
+    crypt: { cypher: 'AES-256-CBC', key: '12345678901234567890123456789012' },
     log: { level: 'ERRORS' } 
   };
 
   const guacCallbacks = {
     processConnectionSettings: function (settings, callback) {
-      // 1. Kiểm tra settings tồn tại
-      if (!settings) {
-          return callback(new Error("Invalid settings"), null);
+      // Guacamole-lite tự bóc vỏ object, nên ta gán conn linh hoạt
+      let conn = settings.connection || settings;
+
+      if (!conn || !conn.settings || !conn.settings.hostname) {
+          console.error("❌ Token không hợp lệ (Missing Hostname)");
+          return callback(new Error("Invalid Token"), null);
       }
 
-      // 2. Lấy connection object
-      let conn = settings.connection;
-      if (!conn) {
-          // Fallback: nếu settings chính là conn (cấu trúc phẳng)
-          conn = settings;
-      }
+      // Khóa chặt các tham số bảo mật 
+      conn.settings.security = 'any'; // Phối hợp với TLS bên xrdp
+      conn.settings['ignore-cert'] = 'true'; // Chấp nhận chứng chỉ tự tạo ở entrypoint
+      conn.settings.dpi = '96'; // Khắc phục vĩnh viễn "96?undefined"
 
-      // 3. [FIX CRASH] Khởi tạo type nếu thiếu
-      if (!conn.type) conn.type = 'vnc';
-
-      // 4. [FIX CRASH - QUAN TRỌNG NHẤT]
-      // Đảm bảo conn.settings luôn là object, không bao giờ là undefined
-      if (!conn.settings) {
-          conn.settings = {}; 
-      }
-
-      // 5. Bây giờ truy cập .width, .height, .dpi thoải mái
-      if (!conn.settings.width) conn.settings.width = 1024;
-      if (!conn.settings.height) conn.settings.height = 768;
-      conn.settings.dpi = 96;
-
-      // 6. Kiểm tra hostname
-      if (!conn.settings.hostname) {
-          // Cố gắng tìm hostname ở cấp cha nếu cấp con không có
-          if (conn.hostname) conn.settings.hostname = conn.hostname;
-          else {
-               console.error("❌ Missing hostname!");
-               return callback(new Error("Missing hostname"), null);
-          }
-      }
-
-      console.log(`🚀 [Guac Connect] Validated -> ${conn.settings.hostname} (${conn.type})`);
+      console.log(`🚀 [Guac Connect] Validated -> ${conn.settings.hostname} | Protocol: RDP | Security: ANY`);
       
       callback(null, settings);
     }

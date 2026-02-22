@@ -14,119 +14,159 @@ export default function GuacamoleDisplay({ token, wsPath, isLocked = false, onAc
   const containerRef = useRef<HTMLDivElement>(null);
   const displayMountRef = useRef<HTMLDivElement>(null);
   const clientRef = useRef<any>(null);
-  const [status, setStatus] = useState<string>("INITIALIZING");
-  const [hasDimensions, setHasDimensions] = useState(false); 
-  const stateRef = useRef<number>(0); 
   
+  // Ref trạng thái
+  const isConnected = useRef(false);
+
+  const [status, setStatus] = useState<string>("INITIALIZING");
+  const [errorMsg, setErrorMsg] = useState<string>("");
+
+  // --- LOGIC SCALE MÀN HÌNH (QUAN TRỌNG) ---
+  // Hàm này giúp màn hình co giãn vừa khít container mà không làm hỏng tọa độ chuột
+  const updateScale = () => {
+      if (!containerRef.current || !clientRef.current) return;
+      
+      const display = clientRef.current.getDisplay();
+      if (!display) return;
+
+      const displayEl = display.getElement();
+      const containerW = containerRef.current.clientWidth;
+      const containerH = containerRef.current.clientHeight;
+
+      // Kích thước thật của máy ảo
+      const origW = display.getWidth();
+      const origH = display.getHeight();
+
+      if (origW === 0 || origH === 0) return;
+
+      // Tính tỉ lệ scale để fit vào container (giữ nguyên aspect ratio)
+      const scale = Math.min(containerW / origW, containerH / origH);
+      
+      display.scale(scale); // Guacamole tự xử lý scale chuột theo tỉ lệ này
+  };
+
   // Resize Observer
   useEffect(() => {
     if (!containerRef.current) return;
-    const observer = new ResizeObserver((entries) => {
-      for (const entry of entries) {
-        if (entry.contentRect.width > 0) {
-            if (!hasDimensions) setHasDimensions(true);
-            if (clientRef.current && stateRef.current === 3) {
-                const w = Math.floor(entry.contentRect.width);
-                const h = Math.floor(entry.contentRect.height);
-                clientRef.current.sendSize(w, h);
-            }
-        }
-      }
+    const observer = new ResizeObserver(() => {
+        // Khi container thay đổi kích thước -> cập nhật scale
+        updateScale();
     });
     observer.observe(containerRef.current);
     return () => observer.disconnect();
-  }, [hasDimensions]);
+  }, []);
 
-  // KẾT NỐI GUACAMOLE
+  // --- LOGIC KẾT NỐI ---
   useEffect(() => {
     if (!token || !wsPath) return;
+    if (clientRef.current) return;
 
-    let cleanupFn = () => {};
+    console.log("🚀 Initializing Guacamole Connection...");
+    setStatus("CONNECTING...");
+    setErrorMsg("");
 
-    const connect = () => {
-      if (clientRef.current) { 
-          try { clientRef.current.disconnect(); } catch {} 
-      }
-      if (displayMountRef.current) displayMountRef.current.innerHTML = "";
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const host = window.location.host;
+    const cleanWsPath = wsPath.split('?')[0]; 
 
-      setStatus("CONNECTING...");
+    // Mặc định kích thước màn hình ảo (Nên set to để nét)
+    const w = 1600; 
+    const h = 900; 
 
-      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const host = window.location.host;
-      
-      // [FIX] Xóa sạch query params thừa trong wsPath
-      const cleanWsPath = wsPath.split('?')[0]; 
-      
-      const w = Math.floor(containerRef.current?.getBoundingClientRect().width || 1024);
-      const h = Math.floor(containerRef.current?.getBoundingClientRect().height || 768);
-      
-      // Tạo chuỗi query string thủ công, đảm bảo không bao giờ có undefined
-      const queryString = `token=${encodeURIComponent(token)}&width=${w}&height=${h}&dpi=96`;
-      
-      const tunnelUrl = `${protocol}//${host}${cleanWsPath}?${queryString}`;
-      
-      console.log("Connecting to Tunnel:", tunnelUrl);
+    // URL kết nối
+    const query = `token=${encodeURIComponent(token)}&width=${w}&height=${h}&dpi=96`;
+    const tunnelUrl = `${protocol}//${host}${cleanWsPath}?${query}`;
 
-      const tunnel = new (Guacamole as any).WebSocketTunnel(tunnelUrl);
-      const client = new (Guacamole as any).Client(tunnel);
-      clientRef.current = client;
+    const tunnel = new (Guacamole as any).WebSocketTunnel(tunnelUrl);
+    const client = new (Guacamole as any).Client(tunnel);
+    clientRef.current = client;
 
-      client.onerror = (error: any) => {
-         console.error("Guac Error:", error);
-         setStatus(`ERROR: ${error.message || error.code}`);
-      };
-
-      client.onstatechange = (state: number) => {
-         stateRef.current = state;
-         if (state === 3) {
-             setStatus("CONNECTED");
-             // Gửi lại size chuẩn khi connect xong
-             if (containerRef.current) {
-                const r = containerRef.current.getBoundingClientRect();
-                client.sendSize(Math.floor(r.width), Math.floor(r.height));
-             }
-         } else if (state === 5) {
-             setStatus("DISCONNECTED");
-         }
-      };
-
-      const display = client.getDisplay();
-      const displayEl = display.getElement();
-      Object.assign(displayEl.style, {
-          width: '100%', height: '100%', zIndex: '10', touchAction: 'none'
-      });
-      displayMountRef.current?.appendChild(displayEl);
-
-      // Input handlers...
-      const mouse = new (Guacamole as any).Mouse(displayEl);
-      mouse.onmousedown = mouse.onmouseup = mouse.onmousemove = (s: any) => {
-          if (!isLocked && clientRef.current) clientRef.current.sendMouseState(s);
-      };
-      const keyboard = new (Guacamole as any).Keyboard(document);
-      keyboard.onkeydown = (k: any) => clientRef.current?.sendKeyEvent(1, k);
-      keyboard.onkeyup = (k: any) => clientRef.current?.sendKeyEvent(0, k);
-
-      client.connect();
-
-      cleanupFn = () => {
-          try { client.disconnect(); } catch {}
-          if (displayMountRef.current) displayMountRef.current.innerHTML = "";
-      };
+    // Error Handler
+    client.onerror = (error: any) => {
+        console.error("Guac Error:", error);
+        if (error.code === 519 || error.message?.includes("Connection closed")) return;
+        setStatus("ERROR");
+        setErrorMsg(error.message || `Error Code: ${error.code}`);
+        isConnected.current = false;
     };
 
-    connect();
-    return () => { cleanupFn(); };
-  }, [token, wsPath]); // Dependency chuẩn
+    // State Handler
+    client.onstatechange = (state: number) => {
+        if (state === 3) { // CONNECTED
+            setStatus("CONNECTED");
+            isConnected.current = true;
+            // Cập nhật scale ngay khi kết nối xong để hình ảnh vừa khít
+            setTimeout(updateScale, 100); 
+        } else if (state === 5) { // DISCONNECTED
+            setStatus("DISCONNECTED");
+            isConnected.current = false;
+            clientRef.current = null;
+        }
+    };
+
+    // --- SETUP DISPLAY ---
+    const display = client.getDisplay();
+    const el = display.getElement();
+    
+    // Style cho element hiển thị: Block bình thường, không dùng transform
+    Object.assign(el.style, { 
+        boxShadow: '0 0 50px rgba(0,0,0,0.5)',
+        cursor: 'none' // Ẩn chuột thật, dùng chuột ảo
+    });
+    
+    if (displayMountRef.current) {
+        displayMountRef.current.innerHTML = "";
+        displayMountRef.current.appendChild(el);
+    }
+
+    // --- MOUSE HANDLER (ĐÃ SỬA LỖI) ---
+    // Guacamole.Mouse tự động xử lý scale nếu ta dùng hàm display.scale()
+    const mouse = new (Guacamole as any).Mouse(el);
+
+    // Ẩn chuột hệ thống trên container
+    if (containerRef.current) containerRef.current.style.cursor = 'none';
+
+    mouse.onmousedown = mouse.onmouseup = mouse.onmousemove = (state: any) => {
+        if (!isLocked && isConnected.current) {
+            client.sendMouseState(state);
+            if (onActivity) onActivity();
+        }
+    };
+
+    // Keyboard Handler
+    const kbd = new (Guacamole as any).Keyboard(document);
+    kbd.onkeydown = (k: any) => isConnected.current && client.sendKeyEvent(1, k);
+    kbd.onkeyup = (k: any) => isConnected.current && client.sendKeyEvent(0, k);
+
+    client.connect();
+
+    return () => {
+        isConnected.current = false;
+        if (client) try { client.disconnect(); } catch {}
+        clientRef.current = null;
+        if (displayMountRef.current) displayMountRef.current.innerHTML = "";
+        if (containerRef.current) containerRef.current.style.cursor = 'auto';
+        kbd.onkeydown = null;
+        kbd.onkeyup = null;
+    };
+  }, [token, wsPath]); 
 
   return (
-    <div ref={containerRef} className="w-full h-full relative bg-black flex items-center justify-center overflow-hidden">
+    // Dùng Flexbox để căn giữa -> An toàn cho tọa độ chuột
+    <div 
+      ref={containerRef} 
+      className="w-full h-full relative bg-[#090b10] flex items-center justify-center overflow-hidden cursor-none"
+    >
       {status !== "CONNECTED" && (
-        <div className="absolute inset-0 z-50 flex flex-col items-center justify-center bg-[#090b10] text-gray-400">
+        <div className="absolute inset-0 z-50 flex flex-col items-center justify-center text-gray-400 bg-[#090b10]">
             <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-blue-500 mb-4"></div>
             <p className="font-mono text-xs tracking-widest">{status}</p>
+            {errorMsg && <p className="text-red-500 text-xs mt-2">{errorMsg}</p>}
         </div>
       )}
-      <div ref={displayMountRef} className="w-full h-full absolute inset-0" />
+      
+      {/* Container chứa Canvas */}
+      <div ref={displayMountRef} />
     </div>
   );
 }

@@ -1,17 +1,39 @@
 #!/bin/bash
-mkdir -p /root/.vnc
+set -e
 
-# 1. Đặt password (Hardcode để khớp với Backend)
-echo "123456" | vncpasswd -f > /root/.vnc/passwd
-chmod 600 /root/.vnc/passwd
+echo "🔧 Setting up RDP (xrdp) Environment..."
 
-# 2. [FIX] Xóa sạch lock file và PID cũ để tránh lỗi "A VNC server is already running"
-rm -rf /tmp/.X1-lock /tmp/.X11-unix/X1 /root/.vnc/*.pid
+mkdir -p /var/run/xrdp
+chown xrdp:xrdp /var/run/xrdp
+rm -rf /var/run/xrdp/xrdp.pid /var/run/xrdp/xrdp-sesman.pid /var/run/xrdp/xrdp_chansrv_audio_out_socket
 
-# 3. Khởi động VNC Server
-# USER=root là cần thiết để tránh một số lỗi permission trên Ubuntu mới
-USER=root vncserver :1 -geometry 1280x720 -depth 24
+/etc/init.d/dbus start || true
 
-# 4. [FIX] Giữ container sống an toàn
-# Dùng tail -f /dev/null chắc chắn hơn là tail file log (vì file log có thể chưa kịp tạo ra)
+# =================================================================
+# [TRÙM CUỐI] TẠO CHỨNG CHỈ TLS CHO XRDP
+# Xử lý dứt điểm lỗi "Server refused connection" do thiếu SSL trong Docker
+if [ ! -f /etc/xrdp/cert.pem ]; then
+    echo "🔐 Generating TLS Certificate for xrdp..."
+    openssl req -x509 -newkey rsa:2048 -nodes -keyout /etc/xrdp/key.pem -out /etc/xrdp/cert.pem -days 365 -subj "/C=US/ST=None/L=None/O=None/OU=None/CN=localhost"
+    chmod 600 /etc/xrdp/key.pem
+    chown xrdp:xrdp /etc/xrdp/key.pem /etc/xrdp/cert.pem
+fi
+
+# Trả xrdp về chuẩn bảo mật mặc định (để nó dùng TLS vừa tạo)
+sed -i 's/security_layer=rdp/security_layer=negotiate/g' /etc/xrdp/xrdp.ini
+sed -i 's/crypt_level=none/crypt_level=high/g' /etc/xrdp/xrdp.ini
+# =================================================================
+
+echo "🚀 Starting xrdp-sesman..."
+/usr/sbin/xrdp-sesman
+echo "🚀 Starting xrdp..."
+/usr/sbin/xrdp
+
+sleep 2
+if ! netstat -tuln | grep -q ":3389 "; then
+    echo "❌ CRITICAL: xrdp failed to start on port 3389!"
+    exit 1
+fi
+echo "✅ RDP Listening on Port 3389 (TLS Enabled)"
+
 tail -f /dev/null
