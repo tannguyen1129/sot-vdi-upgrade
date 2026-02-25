@@ -26,7 +26,7 @@ export class ExamLog {
   @Column({ type: 'text', nullable: true })
   details: string | null;
 
-  @Column({ nullable: true })
+  @Column({ type: 'varchar', nullable: true })
   clientIp: string | null;
 
   @Column({
@@ -43,7 +43,7 @@ export class ExamLog {
   })
   source: ExamLogSource;
 
-  @Column({ nullable: true })
+  @Column({ type: 'varchar', nullable: true })
   sessionId: string | null;
 
   @Column({ type: 'int', default: 0 })

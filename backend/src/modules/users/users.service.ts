@@ -27,6 +27,10 @@ export class UsersService {
     return this.usersRepository.save(newUser);
   }
 
+  async save(user: User): Promise<User> {
+    return this.usersRepository.save(user);
+  }
+
   async updateExam(userId: number, examId: number) {
     const user = await this.usersRepository.findOne({ where: { id: userId } });
     if (user) {

@@ -3,6 +3,16 @@
 import React, { useEffect, useRef, useState } from "react";
 import Guacamole from "guacamole-common-js";
 
+type MouseState = {
+  x: number;
+  y: number;
+  left: boolean;
+  middle: boolean;
+  right: boolean;
+  up: boolean;
+  down: boolean;
+};
+
 interface GuacamoleDisplayProps {
   token: string | null;
   wsPath?: string;
@@ -18,9 +28,41 @@ export default function GuacamoleDisplay({ token, wsPath, isLocked = false, onAc
   
   // Ref trạng thái
   const isConnected = useRef(false);
+  const isLockedRef = useRef(isLocked);
+  const displayScaleRef = useRef(1);
+  const mouseStateRef = useRef<MouseState>({
+    x: 0,
+    y: 0,
+    left: false,
+    middle: false,
+    right: false,
+    up: false,
+    down: false,
+  });
 
   const [status, setStatus] = useState<string>("INITIALIZING");
   const [errorMsg, setErrorMsg] = useState<string>("");
+
+  useEffect(() => {
+    isLockedRef.current = isLocked;
+  }, [isLocked]);
+
+  const getDisplayBounds = () => {
+    const display = clientRef.current?.getDisplay?.();
+    const width = display?.getWidth?.() || 0;
+    const height = display?.getHeight?.() || 0;
+    return { width, height };
+  };
+
+  const clampMouse = (state: MouseState) => {
+    const { width, height } = getDisplayBounds();
+    if (!width || !height) return state;
+    return {
+      ...state,
+      x: Math.min(Math.max(state.x, 0), Math.max(width - 1, 0)),
+      y: Math.min(Math.max(state.y, 0), Math.max(height - 1, 0)),
+    };
+  };
 
   // --- LOGIC SCALE MÀN HÌNH (QUAN TRỌNG) ---
   // Hàm này giúp màn hình co giãn vừa khít container mà không làm hỏng tọa độ chuột
@@ -44,6 +86,13 @@ export default function GuacamoleDisplay({ token, wsPath, isLocked = false, onAc
       const scale = Math.min(containerW / origW, containerH / origH);
       
       display.scale(scale); // Guacamole tự xử lý scale chuột theo tỉ lệ này
+      displayScaleRef.current = scale || 1;
+
+      if (mouseStateRef.current.x === 0 && mouseStateRef.current.y === 0) {
+        mouseStateRef.current = { ...mouseStateRef.current, x: Math.floor(origW / 2), y: Math.floor(origH / 2) };
+      } else {
+        mouseStateRef.current = clampMouse(mouseStateRef.current);
+      }
   };
 
   // Resize Observer
@@ -91,8 +140,7 @@ export default function GuacamoleDisplay({ token, wsPath, isLocked = false, onAc
 
     // Error Handler
     client.onerror = (error: any) => {
-        console.error("Guac Error:", error);
-        // Các mã/lỗi này thường xuất hiện khi phiên bị đóng có chủ đích (nộp bài/thoát phiên).
+        // Các mã/lỗi này thường xuất hiện khi phiên bị đóng có chủ đích (nộp bài/thu hồi VM).
         if (
           isUnmountingRef.current ||
           error.code === 519 ||
@@ -102,6 +150,7 @@ export default function GuacamoleDisplay({ token, wsPath, isLocked = false, onAc
         ) {
           return;
         }
+        console.error("Guac Error:", error);
         setStatus("ERROR");
         setErrorMsg(error.message || `Error Code: ${error.code}`);
         isConnected.current = false;
@@ -136,21 +185,138 @@ export default function GuacamoleDisplay({ token, wsPath, isLocked = false, onAc
         displayMountRef.current.appendChild(el);
     }
 
-    // --- MOUSE HANDLER (ĐÃ SỬA LỖI) ---
-    // Guacamole.Mouse tự động xử lý scale nếu ta dùng hàm display.scale()
-    const mouse = new (Guacamole as any).Mouse(el);
+    // --- MOUSE HANDLER ---
+    // Khi pointer lock bật, dùng movementX/movementY để giữ chuột thật không thoát VM.
+    const sendMouseState = (nextState: MouseState) => {
+      if (!isConnected.current) return;
+      const clamped = clampMouse(nextState);
+      mouseStateRef.current = clamped;
+      client.sendMouseState(clamped);
+      if (onActivity) onActivity();
+    };
+
+    const toDisplayPosition = (event: MouseEvent) => {
+      const rect = el.getBoundingClientRect();
+      const scale = displayScaleRef.current || 1;
+      return clampMouse({
+        ...mouseStateRef.current,
+        x: Math.round((event.clientX - rect.left) / scale),
+        y: Math.round((event.clientY - rect.top) / scale),
+      });
+    };
+
+    const isPointerLocked = () => document.pointerLockElement !== null;
+
+    const updateButtons = (button: number, pressed: boolean) => {
+      const nextState = { ...mouseStateRef.current };
+      if (button === 0) nextState.left = pressed;
+      if (button === 1) nextState.middle = pressed;
+      if (button === 2) nextState.right = pressed;
+      sendMouseState(nextState);
+    };
+
+    const releaseMouseButtons = () => {
+      sendMouseState({
+        ...mouseStateRef.current,
+        left: false,
+        middle: false,
+        right: false,
+        up: false,
+        down: false,
+      });
+    };
+
+    const handleMouseMove = (event: MouseEvent) => {
+      if (!isConnected.current) return;
+      if (isPointerLocked()) {
+        const scale = displayScaleRef.current || 1;
+        sendMouseState({
+          ...mouseStateRef.current,
+          x: mouseStateRef.current.x + event.movementX / scale,
+          y: mouseStateRef.current.y + event.movementY / scale,
+        });
+        return;
+      }
+      sendMouseState(toDisplayPosition(event));
+    };
+
+    const handleMouseDown = (event: MouseEvent) => {
+      event.preventDefault();
+      if (!isPointerLocked()) {
+        sendMouseState(toDisplayPosition(event));
+      }
+      updateButtons(event.button, true);
+    };
+
+    const handleMouseUp = (event: MouseEvent) => {
+      event.preventDefault();
+      if (!isPointerLocked()) {
+        sendMouseState(toDisplayPosition(event));
+      }
+      updateButtons(event.button, false);
+    };
+
+    const handleWheel = (event: WheelEvent) => {
+      event.preventDefault();
+      if (!isPointerLocked()) {
+        sendMouseState(toDisplayPosition(event as unknown as MouseEvent));
+      }
+      if (event.deltaY < 0) {
+        sendMouseState({ ...mouseStateRef.current, up: true });
+        sendMouseState({ ...mouseStateRef.current, up: false });
+      } else if (event.deltaY > 0) {
+        sendMouseState({ ...mouseStateRef.current, down: true });
+        sendMouseState({ ...mouseStateRef.current, down: false });
+      }
+    };
+
+    const handleDocumentWheel = (event: WheelEvent) => {
+      if (!isPointerLocked() && !isLockedRef.current) return;
+      event.preventDefault();
+      handleWheel(event);
+    };
+
+    const handlePointerLockChange = () => {
+      if (!isPointerLocked()) {
+        releaseMouseButtons();
+      }
+    };
+
+    const handleWindowBlur = () => {
+      releaseMouseButtons();
+    };
+
+    const handleContextMenu = (event: MouseEvent) => {
+      event.preventDefault();
+    };
 
     // Ẩn chuột hệ thống trên container
     if (containerRef.current) containerRef.current.style.cursor = 'none';
 
-    mouse.onmousedown = mouse.onmouseup = mouse.onmousemove = (state: any) => {
-        const hasPointerLock = document.pointerLockElement !== null;
-        const canSendMouse = isConnected.current && (!isLocked || hasPointerLock);
-        if (!canSendMouse) return;
-
-        client.sendMouseState(state);
-        if (onActivity) onActivity();
+    const handleLockedMouseMove = (event: MouseEvent) => {
+      if (!isPointerLocked()) return;
+      handleMouseMove(event);
     };
+    const handleLockedMouseDown = (event: MouseEvent) => {
+      if (!isPointerLocked()) return;
+      handleMouseDown(event);
+    };
+    const handleLockedMouseUp = (event: MouseEvent) => {
+      if (!isPointerLocked()) return;
+      handleMouseUp(event);
+    };
+
+    el.addEventListener("mousemove", handleMouseMove);
+    el.addEventListener("mousedown", handleMouseDown);
+    el.addEventListener("mouseup", handleMouseUp);
+    el.addEventListener("wheel", handleWheel, { passive: false });
+    el.addEventListener("contextmenu", handleContextMenu);
+    document.addEventListener("mousemove", handleLockedMouseMove);
+    document.addEventListener("mousedown", handleLockedMouseDown);
+    document.addEventListener("mouseup", handleLockedMouseUp);
+    document.addEventListener("wheel", handleDocumentWheel, { passive: false });
+    document.addEventListener("pointerlockchange", handlePointerLockChange);
+    window.addEventListener("blur", handleWindowBlur);
 
     // Keyboard Handler
     const kbd = new (Guacamole as any).Keyboard(document);
@@ -168,6 +334,17 @@ export default function GuacamoleDisplay({ token, wsPath, isLocked = false, onAc
         if (containerRef.current) containerRef.current.style.cursor = 'auto';
         kbd.onkeydown = null;
         kbd.onkeyup = null;
+        el.removeEventListener("mousemove", handleMouseMove);
+        el.removeEventListener("mousedown", handleMouseDown);
+        el.removeEventListener("mouseup", handleMouseUp);
+        el.removeEventListener("wheel", handleWheel);
+        el.removeEventListener("contextmenu", handleContextMenu);
+        document.removeEventListener("mousemove", handleLockedMouseMove);
+        document.removeEventListener("mousedown", handleLockedMouseDown);
+        document.removeEventListener("mouseup", handleLockedMouseUp);
+        document.removeEventListener("wheel", handleDocumentWheel);
+        document.removeEventListener("pointerlockchange", handlePointerLockChange);
+        window.removeEventListener("blur", handleWindowBlur);
     };
   }, [token, wsPath]); 
 

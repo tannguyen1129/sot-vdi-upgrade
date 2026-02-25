@@ -61,6 +61,7 @@ export default function ExamInterface({
   const isUnlockIntentRef = useRef(false); // Cờ chủ động mở khóa (Alt+Enter)
   const vmContainerRef = useRef<HTMLDivElement>(null);
   const lastActivityRef = useRef<number>(Date.now()); 
+  const blurTimerRef = useRef<number | null>(null);
   const router = useRouter();
 
   // ==============================
@@ -138,8 +139,8 @@ export default function ExamInterface({
 
     // 3. Dọn dẹp màn hình
     try {
+      if (document.pointerLockElement) document.exitPointerLock();
       if (document.exitFullscreen) await document.exitFullscreen();
-      if (document.exitPointerLock) document.exitPointerLock();
     } catch (e) {}
 
     // 4. Chuyển trang
@@ -152,25 +153,71 @@ export default function ExamInterface({
 
   useEffect(() => {
     logActivity('JOIN', 'Truy cập vào phòng thi');
-    
-    // Xử lý khi đóng tab đột ngột
+
     const handleUnload = () => {
       if (isSubmittingRef.current) return;
       sendBeaconLog('LEAVE', 'Rời khỏi trang thi đột ngột');
     };
     window.addEventListener('beforeunload', handleUnload);
 
-    // Heartbeat Interval: Chỉ chạy khi KHÔNG có vi phạm
+    return () => {
+      window.removeEventListener('beforeunload', handleUnload);
+    };
+    // JOIN chỉ ghi một lần để tránh log rác khi state thay đổi.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
     const heartbeatInterval = setInterval(() => {
-       if (hasStarted && !isSubmittingRef.current && !violation && Date.now() - lastActivityRef.current < 60000) {
-           logActivity('ACTIVE', 'Heartbeat signal (User active)', {
-            idleMs: Date.now() - lastActivityRef.current,
-           });
-       }
+      if (hasStarted && !isSubmittingRef.current && !violation && Date.now() - lastActivityRef.current < 60000) {
+        logActivity('ACTIVE', 'Heartbeat signal (User active)', {
+          idleMs: Date.now() - lastActivityRef.current,
+        });
+      }
     }, 60000);
 
-    return () => { window.removeEventListener('beforeunload', handleUnload); clearInterval(heartbeatInterval); };
-  }, [hasStarted, violation]); 
+    return () => clearInterval(heartbeatInterval);
+  }, [hasStarted, violation]);
+
+  useEffect(() => {
+    const previousBodyOverflow = document.body.style.overflow;
+    const previousHtmlOverflow = document.documentElement.style.overflow;
+    const previousBodyOverscroll = document.body.style.overscrollBehavior;
+    const previousHtmlOverscroll = document.documentElement.style.overscrollBehavior;
+
+    document.body.style.overflow = 'hidden';
+    document.documentElement.style.overflow = 'hidden';
+    document.body.style.overscrollBehavior = 'none';
+    document.documentElement.style.overscrollBehavior = 'none';
+
+    return () => {
+      document.body.style.overflow = previousBodyOverflow;
+      document.documentElement.style.overflow = previousHtmlOverflow;
+      document.body.style.overscrollBehavior = previousBodyOverscroll;
+      document.documentElement.style.overscrollBehavior = previousHtmlOverscroll;
+    };
+  }, []);
+
+  useEffect(() => {
+    const shouldBlockPageScroll = hasStarted && isLocked && !showExitConfirm && !showSubmitConfirm && !violation;
+    if (!shouldBlockPageScroll) return;
+
+    const blockWheel = (event: WheelEvent) => {
+      event.preventDefault();
+    };
+
+    const blockTouchMove = (event: TouchEvent) => {
+      event.preventDefault();
+    };
+
+    window.addEventListener('wheel', blockWheel, { passive: false, capture: true });
+    window.addEventListener('touchmove', blockTouchMove, { passive: false, capture: true });
+
+    return () => {
+      window.removeEventListener('wheel', blockWheel, { capture: true });
+      window.removeEventListener('touchmove', blockTouchMove, { capture: true });
+    };
+  }, [hasStarted, isLocked, showExitConfirm, showSubmitConfirm, violation]);
 
   // Đồng hồ đếm ngược
   useEffect(() => {
@@ -195,8 +242,9 @@ export default function ExamInterface({
   const triggerViolation = (action: string, reason: string) => {
       if (!hasStarted || isSubmittingRef.current || violation) return;
       setViolation(reason);
-      logActivity(action, reason);
+      setIsLocked(false);
       if (document.pointerLockElement) document.exitPointerLock();
+      logActivity(action, reason);
   };
 
   const resolveViolation = async () => {
@@ -204,7 +252,7 @@ export default function ExamInterface({
       await logActivity('VIOLATION_RESOLVED', `Thí sinh đã quay lại làm bài (Đã hiểu lỗi: ${violation})`);
       setViolation(null);
       isUnlockIntentRef.current = false;
-      await startExamSession(); 
+      await enterExamSession(true);
   };
 
   useEffect(() => {
@@ -219,10 +267,15 @@ export default function ExamInterface({
           }
       }
 
+      // Chặn cuộn trang ngoài khi đang thi và đang lock chuột.
+      if (hasStarted && isLocked && [' ', 'PageUp', 'PageDown', 'Home', 'End', 'ArrowUp', 'ArrowDown'].includes(e.key)) {
+        e.preventDefault();
+      }
+
       // Xử lý Alt + Enter (Hợp lệ)
       if (e.altKey && e.key === 'Enter') {
           isUnlockIntentRef.current = true;
-          document.exitPointerLock();
+          if (document.pointerLockElement) document.exitPointerLock();
           setIsLocked(false);
           setShowExitConfirm(true); 
           logActivity('UNLOCK_MOUSE', 'Chủ động mở menu (Alt+Enter)', { intentional: true });
@@ -236,34 +289,43 @@ export default function ExamInterface({
     };
 
     const handleBlur = () => {
-        if (!hasStarted || isSubmittingRef.current) return;
-        // Zero Trust: Mất tiêu điểm là vi phạm (Trừ khi đang trong quy trình hợp lệ nào đó chưa implement)
-        triggerViolation('VIOLATION_BLUR', 'Mất tiêu điểm (Chuyển cửa sổ/Alt+Tab)');
+      if (!hasStarted || isSubmittingRef.current) return;
+      if (isUnlockIntentRef.current || showExitConfirm || showSubmitConfirm) return;
+
+      // Debounce ngắn để loại các blur giả khi chuyển trạng thái UI trong cùng cửa sổ.
+      if (blurTimerRef.current) window.clearTimeout(blurTimerRef.current);
+      blurTimerRef.current = window.setTimeout(() => {
+        const lostFocus = document.visibilityState === 'hidden' || !document.hasFocus();
+        if (lostFocus) {
+          triggerViolation('VIOLATION_BLUR', 'Mất tiêu điểm (Chuyển cửa sổ/Alt+Tab)');
+        }
+      }, 350);
     };
 
-    const handleMouseLeave = () => {
-        if (!hasStarted || isSubmittingRef.current) return;
-        // Nếu chuột rời vùng mà không phải do mở menu hay mở popup nộp bài -> Vi phạm
-        if (!isUnlockIntentRef.current && !showExitConfirm && !showSubmitConfirm && !isLocked) {
-            triggerViolation('VIOLATION_MOUSE_LEAVE', 'Di chuyển chuột ra khỏi màn hình thi');
-        }
+    const handleFocus = () => {
+      if (blurTimerRef.current) {
+        window.clearTimeout(blurTimerRef.current);
+        blurTimerRef.current = null;
+      }
     };
 
     const handlePointerLockChange = () => {
-      if (document.pointerLockElement === vmContainerRef.current) {
-        setIsLocked(true); setShowExitConfirm(false); setShowSubmitConfirm(false);
-      } else {
-        setIsLocked(false);
-        // Nếu mất lock mà không phải do Alt+Enter (Menu) hoặc đang hiện Confirm Submit -> Vi phạm
-        if (hasStarted && !isSubmittingRef.current && !isUnlockIntentRef.current && !showSubmitConfirm) {
-            triggerViolation('VIOLATION_POINTER_UNLOCK', 'Thoát khóa chuột trái phép');
-        }
+      const locked = document.pointerLockElement === vmContainerRef.current;
+      if (locked) {
+        setIsLocked(true);
+        setShowExitConfirm(false);
+        setShowSubmitConfirm(false);
+        return;
       }
+      if (!hasStarted || isSubmittingRef.current) return;
+      if (isUnlockIntentRef.current || showExitConfirm || showSubmitConfirm) return;
+      if (isLocked) triggerViolation('VIOLATION_POINTER_UNLOCK', 'Thoát khóa chuột trái phép');
     };
 
     const handleFullscreenChange = () => {
       if (!document.fullscreenElement) {
         setIsFullscreen(false);
+        setIsLocked(false);
         if (hasStarted && !isSubmittingRef.current) {
           triggerViolation('VIOLATION_FULLSCREEN_EXIT', 'Thoát chế độ toàn màn hình');
         }
@@ -276,14 +338,18 @@ export default function ExamInterface({
     document.addEventListener('pointerlockchange', handlePointerLockChange);
     document.addEventListener('fullscreenchange', handleFullscreenChange);
     window.addEventListener('blur', handleBlur);
-    document.addEventListener('mouseleave', handleMouseLeave);
+    window.addEventListener('focus', handleFocus);
 
     return () => {
       document.removeEventListener('keydown', handleKeyDown);
       document.removeEventListener('pointerlockchange', handlePointerLockChange);
       document.removeEventListener('fullscreenchange', handleFullscreenChange);
       window.removeEventListener('blur', handleBlur);
-      document.removeEventListener('mouseleave', handleMouseLeave);
+      window.removeEventListener('focus', handleFocus);
+      if (blurTimerRef.current) {
+        window.clearTimeout(blurTimerRef.current);
+        blurTimerRef.current = null;
+      }
     };
   }, [hasStarted, isLocked, showExitConfirm, showSubmitConfirm, violation]);
 
@@ -291,18 +357,27 @@ export default function ExamInterface({
   // 4. HELPER FUNCTIONS
   // ==============================
 
-  const startExamSession = async () => {
+  const enterExamSession = async (isResume = false) => {
     try {
       if (!document.fullscreenElement) await document.documentElement.requestFullscreen();
-      vmContainerRef.current?.requestPointerLock();
       setHasStarted(true); setIsFullscreen(true); setViolation(null); isUnlockIntentRef.current = false;
-      logActivity('START', 'Bắt đầu làm bài thi');
+      setShowExitConfirm(false);
+      setShowSubmitConfirm(false);
+      setIsLocked(true);
+      vmContainerRef.current?.requestPointerLock();
+      if (isResume) {
+        logActivity('RESUME', 'Thí sinh quay lại làm bài sau vi phạm');
+      } else {
+        logActivity('START', 'Bắt đầu làm bài thi');
+      }
     } catch (err) { alert("Hệ thống yêu cầu chế độ toàn màn hình để bắt đầu."); }
   };
 
   const attemptLock = () => {
       // Chỉ cho phép lock lại nếu KHÔNG có vi phạm và KHÔNG đang hiện popup confirm
       if (!violation && !showSubmitConfirm) {
+          setIsLocked(true);
+          setShowExitConfirm(false);
           vmContainerRef.current?.requestPointerLock();
       }
   };
@@ -316,8 +391,9 @@ export default function ExamInterface({
 
   // --- Modal Helpers ---
   const openSubmitConfirm = () => {
-      if (document.pointerLockElement) document.exitPointerLock();
       isUnlockIntentRef.current = true; // Đánh dấu unlock hợp lệ để không bị bắt lỗi
+      if (document.pointerLockElement) document.exitPointerLock();
+      setIsLocked(false);
       setShowSubmitConfirm(true);
       setShowExitConfirm(false);
   };
@@ -423,7 +499,7 @@ export default function ExamInterface({
                         Hệ thống sẽ chuyển sang chế độ <strong>Toàn màn hình</strong> và <strong>Khóa chuột</strong>.
                         <br/>Mọi hành động thoát ra sẽ bị ghi lại là vi phạm.
                     </p>
-                    <button onClick={startExamSession} className="w-full py-3 bg-gradient-to-r from-blue-600 to-cyan-600 hover:from-blue-500 hover:to-cyan-500 text-white font-bold rounded-xl shadow-lg hover:shadow-blue-500/25 transition-all flex items-center justify-center gap-2">
+                    <button onClick={() => enterExamSession(false)} className="w-full py-3 bg-gradient-to-r from-blue-600 to-cyan-600 hover:from-blue-500 hover:to-cyan-500 text-white font-bold rounded-xl shadow-lg hover:shadow-blue-500/25 transition-all flex items-center justify-center gap-2">
                         <span>BẮT ĐẦU NGAY</span>
                         <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M13 7l5 5m0 0l-5 5m5-5H6" /></svg>
                     </button>

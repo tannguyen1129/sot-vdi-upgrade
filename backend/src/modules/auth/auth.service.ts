@@ -26,7 +26,14 @@ export class AuthService implements OnModuleInit {
       const existingAdmin = await this.usersService.findOne('admin');
 
       if (existingAdmin) {
-        this.logger.log('✅ Admin đã tồn tại. Bỏ qua bước tạo mới.');
+        // Tự phục hồi quyền admin nếu tài khoản admin bị sai role trong DB.
+        if (existingAdmin.role !== UserRole.ADMIN) {
+          existingAdmin.role = UserRole.ADMIN;
+          await this.usersService.save(existingAdmin);
+          this.logger.warn('⚠️ Đã tự động nâng quyền tài khoản admin lên ADMIN.');
+        } else {
+          this.logger.log('✅ Admin đã tồn tại. Bỏ qua bước tạo mới.');
+        }
         return;
       }
 

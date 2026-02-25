@@ -1,6 +1,14 @@
 'use client';
 
+import { usePathname } from 'next/navigation';
+
 export default function Footer() {
+  const pathname = usePathname();
+  const isStudentExamPage = pathname.includes('/exam/') && !pathname.startsWith('/admin');
+  const isVdiPage = pathname.includes('/vdi');
+
+  if (isStudentExamPage || isVdiPage) return null;
+
   return (
     <footer className="relative z-10 w-full bg-slate-950 text-slate-400 py-10 border-t border-slate-800 font-sans text-sm leading-relaxed">
       <div className="container mx-auto px-6 lg:px-12">

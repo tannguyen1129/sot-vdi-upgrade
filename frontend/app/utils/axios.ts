@@ -16,7 +16,7 @@ api.interceptors.request.use(
   (config) => {
     if (typeof window !== 'undefined') {
       // 1. Thử lấy token trực tiếp
-      let token = localStorage.getItem('accessToken');
+      let token = localStorage.getItem('accessToken') || localStorage.getItem('access_token');
 
       // 2. Nếu không có, thử tìm trong object 'user'
       if (!token) {
@@ -42,3 +42,17 @@ api.interceptors.request.use(
 );
 
 export default api;
+
+api.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    if (typeof window !== 'undefined' && error?.response?.status === 401) {
+      // Token hết hạn / không hợp lệ -> reset session để tránh vòng lặp 401 khó hiểu.
+      localStorage.removeItem('accessToken');
+      localStorage.removeItem('access_token');
+      localStorage.removeItem('user');
+      window.dispatchEvent(new Event('auth-change'));
+    }
+    return Promise.reject(error);
+  },
+);

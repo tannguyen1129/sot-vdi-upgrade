@@ -13,8 +13,7 @@ export class ExamsController {
     private readonly vdiService: VdiService
   ) {}
 
-  @UseGuards(JwtAuthGuard)
-  @UseGuards(RolesGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.ADMIN, UserRole.PROCTOR)
   @Post()
   create(@Body() createExamDto: any) {
@@ -33,16 +32,14 @@ export class ExamsController {
     return this.examsService.findOne(+id);
   }
 
-  @UseGuards(JwtAuthGuard)
-  @UseGuards(RolesGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.ADMIN, UserRole.PROCTOR)
   @Patch(':id')
   update(@Param('id') id: string, @Body() updateExamDto: any) {
     return this.examsService.update(+id, updateExamDto);
   }
 
-  @UseGuards(JwtAuthGuard)
-  @UseGuards(RolesGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.ADMIN, UserRole.PROCTOR)
   @Delete(':id')
   remove(@Param('id') id: string) {
