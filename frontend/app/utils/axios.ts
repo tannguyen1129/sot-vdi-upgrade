@@ -1,7 +1,12 @@
 import axios from 'axios';
 
+const configuredApiUrl = process.env.NEXT_PUBLIC_API_URL?.trim();
+const normalizedApiBase = configuredApiUrl
+  ? `${configuredApiUrl.replace(/\/+$/, '').replace(/\/api$/, '')}/api`
+  : '/api';
+
 const api = axios.create({
-  baseURL: process.env.NEXT_PUBLIC_API_URL || 'https://sotvdi.umtoj.edu.vn/api',
+  baseURL: normalizedApiBase,
   headers: {
     'Content-Type': 'application/json',
   },

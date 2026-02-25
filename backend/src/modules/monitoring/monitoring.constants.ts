@@ -1,0 +1,81 @@
+import { ExamLogSeverity } from '../../entities/exam-log.entity';
+
+export const VIOLATION_ACTION_PREFIX = 'VIOLATION_';
+
+export const MONITORING_ACTIONS = {
+  JOIN: 'JOIN',
+  START: 'START',
+  ACTIVE: 'ACTIVE',
+  LEAVE: 'LEAVE',
+  DISCONNECT: 'DISCONNECT',
+  SUBMIT: 'SUBMIT',
+  UNLOCK_MOUSE: 'UNLOCK_MOUSE',
+  VIOLATION_GENERIC: 'VIOLATION_GENERIC',
+  VIOLATION_ALT_TAB: 'VIOLATION_ALT_TAB',
+  VIOLATION_BLUR: 'VIOLATION_BLUR',
+  VIOLATION_FULLSCREEN_EXIT: 'VIOLATION_FULLSCREEN_EXIT',
+  VIOLATION_POINTER_UNLOCK: 'VIOLATION_POINTER_UNLOCK',
+  VIOLATION_MOUSE_LEAVE: 'VIOLATION_MOUSE_LEAVE',
+  VIOLATION_SYSTEM_KEY: 'VIOLATION_SYSTEM_KEY',
+  VIOLATION_RESOLVED: 'VIOLATION_RESOLVED',
+} as const;
+
+const CRITICAL_ACTIONS = new Set<string>([
+  MONITORING_ACTIONS.VIOLATION_ALT_TAB,
+  MONITORING_ACTIONS.VIOLATION_FULLSCREEN_EXIT,
+  MONITORING_ACTIONS.VIOLATION_POINTER_UNLOCK,
+  MONITORING_ACTIONS.VIOLATION_SYSTEM_KEY,
+]);
+
+const WARN_ACTIONS = new Set<string>([
+  MONITORING_ACTIONS.UNLOCK_MOUSE,
+  MONITORING_ACTIONS.LEAVE,
+  MONITORING_ACTIONS.DISCONNECT,
+  MONITORING_ACTIONS.VIOLATION_MOUSE_LEAVE,
+  MONITORING_ACTIONS.VIOLATION_BLUR,
+  MONITORING_ACTIONS.VIOLATION_GENERIC,
+  MONITORING_ACTIONS.VIOLATION_RESOLVED,
+]);
+
+const SCORE_BY_ACTION: Record<string, number> = {
+  [MONITORING_ACTIONS.VIOLATION_ALT_TAB]: 5,
+  [MONITORING_ACTIONS.VIOLATION_FULLSCREEN_EXIT]: 4,
+  [MONITORING_ACTIONS.VIOLATION_POINTER_UNLOCK]: 3,
+  [MONITORING_ACTIONS.VIOLATION_SYSTEM_KEY]: 4,
+  [MONITORING_ACTIONS.VIOLATION_MOUSE_LEAVE]: 2,
+  [MONITORING_ACTIONS.VIOLATION_BLUR]: 2,
+  [MONITORING_ACTIONS.VIOLATION_GENERIC]: 2,
+  [MONITORING_ACTIONS.UNLOCK_MOUSE]: 1,
+  [MONITORING_ACTIONS.VIOLATION_RESOLVED]: -1,
+};
+
+export function normalizeMonitoringAction(rawAction: unknown): string {
+  const action = String(rawAction ?? '')
+    .trim()
+    .toUpperCase()
+    .replace(/[\s-]+/g, '_');
+
+  if (!action) {
+    return MONITORING_ACTIONS.ACTIVE;
+  }
+
+  // Backward compatibility with old payloads.
+  if (action === 'VIOLATION') return MONITORING_ACTIONS.VIOLATION_GENERIC;
+  if (action === 'VIOLATION_FULLSCREEN') return MONITORING_ACTIONS.VIOLATION_FULLSCREEN_EXIT;
+
+  return action;
+}
+
+export function isViolationAction(action: string): boolean {
+  return action.startsWith(VIOLATION_ACTION_PREFIX);
+}
+
+export function inferSeverity(action: string): ExamLogSeverity {
+  if (CRITICAL_ACTIONS.has(action)) return ExamLogSeverity.CRITICAL;
+  if (WARN_ACTIONS.has(action) || isViolationAction(action)) return ExamLogSeverity.WARN;
+  return ExamLogSeverity.INFO;
+}
+
+export function violationScoreFor(action: string): number {
+  return SCORE_BY_ACTION[action] ?? (isViolationAction(action) ? 2 : 0);
+}

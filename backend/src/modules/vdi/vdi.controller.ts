@@ -21,7 +21,7 @@ export class VdiController {
 
     return { 
       token,
-      type: 'vnc',
+      type: 'rdp',
       ip 
     };
   }

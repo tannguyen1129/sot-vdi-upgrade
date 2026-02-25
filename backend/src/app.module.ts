@@ -17,6 +17,14 @@ import { Exam } from './entities/exam.entity';
 import { MonitoringModule } from './modules/monitoring/monitoring.module';
 import { ScheduleModule } from '@nestjs/schedule/dist/schedule.module';
 
+function asBool(value: string | undefined, fallback: boolean): boolean {
+  if (value === undefined) {
+    return fallback;
+  }
+  const normalized = value.trim().toLowerCase();
+  return ['1', 'true', 'yes', 'on'].includes(normalized);
+}
+
 @Module({
   imports: [
     ScheduleModule.forRoot(),
@@ -35,7 +43,12 @@ import { ScheduleModule } from '@nestjs/schedule/dist/schedule.module';
       database: process.env.DB_NAME || 'vdi_portal_db',
       
       entities: [__dirname + '/**/*.entity{.ts,.js}'], // Tự động load hết entity
-      synchronize: true,
+      // Giữ synchronize mặc định true theo yêu cầu hiện tại.
+      synchronize: asBool(process.env.TYPEORM_SYNCHRONIZE, true),
+      // Migration-safe knobs: cho phép bật migration có kiểm soát bằng env.
+      migrations: [__dirname + '/migrations/*{.ts,.js}'],
+      migrationsRun: asBool(process.env.TYPEORM_MIGRATIONS_RUN, false),
+      migrationsTableName: process.env.TYPEORM_MIGRATIONS_TABLE || 'typeorm_migrations',
     }),
     // Đăng ký đủ 4 anh hào
     UsersModule,

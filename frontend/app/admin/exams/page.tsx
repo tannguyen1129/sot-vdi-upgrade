@@ -377,7 +377,7 @@ export default function ExamsPage() {
         )}
 
         {/* --- CUSTOM TOAST NOTIFICATION --- */}
-        <div className={`fixed top-4 right-4 z-[100] transition-all duration-300 transform ${toast.show ? 'translate-x-0 opacity-100' : 'translate-x-full opacity-0'}`}>
+        <div className={`fixed top-[calc(env(safe-area-inset-top)+5rem)] right-4 z-[100] transition-all duration-300 transform ${toast.show ? 'translate-x-0 opacity-100' : 'translate-x-full opacity-0'}`}>
            <div className={`flex items-center gap-3 px-6 py-4 border-l-4 shadow-2xl bg-white min-w-[300px]
               ${toast.type === 'success' ? 'border-emerald-500' : ''}
               ${toast.type === 'error' ? 'border-red-500' : ''}

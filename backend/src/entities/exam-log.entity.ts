@@ -2,6 +2,19 @@ import { Entity, Column, PrimaryGeneratedColumn, CreateDateColumn, ManyToOne, Jo
 import { User } from './user.entity';
 import { Exam } from './exam.entity';
 
+export enum ExamLogSeverity {
+  INFO = 'INFO',
+  WARN = 'WARN',
+  CRITICAL = 'CRITICAL',
+}
+
+export enum ExamLogSource {
+  WEB_CLIENT = 'WEB_CLIENT',
+  BEACON = 'BEACON',
+  SYSTEM = 'SYSTEM',
+  ADMIN = 'ADMIN',
+}
+
 @Entity()
 export class ExamLog {
   @PrimaryGeneratedColumn()
@@ -11,10 +24,33 @@ export class ExamLog {
   action: string;
 
   @Column({ type: 'text', nullable: true })
-  details: string;
+  details: string | null;
 
   @Column({ nullable: true })
-  clientIp: string;
+  clientIp: string | null;
+
+  @Column({
+    type: 'enum',
+    enum: ExamLogSeverity,
+    default: ExamLogSeverity.INFO,
+  })
+  severity: ExamLogSeverity;
+
+  @Column({
+    type: 'enum',
+    enum: ExamLogSource,
+    default: ExamLogSource.WEB_CLIENT,
+  })
+  source: ExamLogSource;
+
+  @Column({ nullable: true })
+  sessionId: string | null;
+
+  @Column({ type: 'int', default: 0 })
+  violationScore: number;
+
+  @Column({ type: 'jsonb', nullable: true })
+  meta: Record<string, unknown> | null;
 
   @CreateDateColumn()
   createdAt: Date;

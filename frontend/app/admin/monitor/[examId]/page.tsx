@@ -25,11 +25,16 @@ interface LiveStudent {
     lastSeen: string;
   };
   isViolation: boolean;
+  riskScore: number;
 }
 
 interface ExamLog {
   id: number;
   action: string;
+  severity: 'INFO' | 'WARN' | 'CRITICAL';
+  source: 'WEB_CLIENT' | 'BEACON' | 'SYSTEM' | 'ADMIN';
+  sessionId?: string;
+  violationScore?: number;
   details: string;
   clientIp: string;
   createdAt: string;
@@ -133,14 +138,14 @@ export default function ExamMonitorDetailPage() {
 
   // --- HELPER: STATUS STYLES ---
   const getCardStyle = (st: LiveStudent) => {
-    if (st.isViolation) return "border-red-500 bg-red-950/30 shadow-[0_0_15px_rgba(239,68,68,0.5)]"; 
+    if (st.isViolation || st.riskScore >= 4) return "border-red-500 bg-red-950/30 shadow-[0_0_15px_rgba(239,68,68,0.5)]"; 
     if (!st.vm) return "border-slate-700 bg-slate-800/50 opacity-60 grayscale";
     if (st.client.lastAction === 'LEAVE' || st.client.lastAction === 'DISCONNECT') return "border-amber-500 bg-amber-950/30 border-dashed";
     return "border-emerald-500/50 bg-slate-800 hover:border-emerald-400 hover:bg-slate-750 hover:shadow-[0_0_10px_rgba(16,185,129,0.2)]";
   };
 
   const getStatusBadge = (st: LiveStudent) => {
-     if (st.isViolation) return <span className="text-red-500 font-bold animate-pulse">⚠️ VIOLATION</span>;
+     if (st.isViolation || st.riskScore >= 4) return <span className="text-red-500 font-bold animate-pulse">⚠️ HIGH RISK</span>;
      if (!st.vm) return <span className="text-slate-500 font-mono">WAITING...</span>;
      if (st.client.lastAction === 'LEAVE') return <span className="text-amber-500 font-bold">⚠️ OFFLINE</span>;
      return <span className="text-emerald-400 font-bold flex items-center gap-1"><span className="w-2 h-2 bg-emerald-400 rounded-full animate-ping"></span> LIVE</span>;
@@ -319,7 +324,7 @@ export default function ExamMonitorDetailPage() {
             {/* Body Logs */}
             <div className="flex-1 overflow-y-auto p-0 font-mono text-xs custom-scrollbar bg-[#0d1117]">
                {logs.map((log) => {
-                  const isViolation = log.action.includes('VIOLATION');
+                  const isViolation = log.action.startsWith('VIOLATION_') || log.severity !== 'INFO';
                   const isSubmit = log.action === 'SUBMIT';
                   const isJoin = log.action === 'JOIN';
                   
@@ -329,7 +334,16 @@ export default function ExamMonitorDetailPage() {
                   let badgeClass = 'bg-gray-800 text-gray-400 border-gray-700';
                   let Icon = null;
 
-                  if (isViolation) {
+                  if (log.severity === 'CRITICAL') {
+                      borderClass = 'border-l-2 border-red-500 bg-red-950/40';
+                      bgHoverClass = 'hover:bg-red-900/30';
+                      badgeClass = 'bg-red-950 text-red-300 border-red-700';
+                      Icon = (
+                        <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M5.07 19h13.86c1.54 0 2.5-1.67 1.73-3L13.73 4c-.77-1.33-2.69-1.33-3.46 0L3.34 16c-.77 1.33.19 3 1.73 3z" />
+                        </svg>
+                      );
+                  } else if (isViolation) {
                       borderClass = 'border-l-2 border-red-600 bg-red-900/10';
                       bgHoverClass = 'hover:bg-red-900/20';
                       badgeClass = 'bg-red-950 text-red-400 border-red-900';
@@ -392,6 +406,7 @@ export default function ExamMonitorDetailPage() {
                             <span className={`font-bold text-sm ${isViolation ? 'text-red-200' : 'text-gray-300'}`}>
                                {log.user?.username || 'Unknown'}
                             </span>
+                            <span className="text-[9px] px-1.5 py-0.5 border rounded border-slate-700 text-slate-400">{log.source}</span>
                          </div>
 
                          {/* Dòng 3: Details */}

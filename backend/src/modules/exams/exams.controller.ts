@@ -2,6 +2,9 @@ import { Controller, Get, Post, Body, Patch, Param, Delete, UseGuards, Request }
 import { ExamsService } from './exams.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { VdiService } from '../vdi/vdi.service';
+import { RolesGuard } from '../auth/guards/roles.guard';
+import { Roles } from '../auth/decorators/roles.decorator';
+import { UserRole } from '../../entities/user.entity';
 
 @Controller('exams')
 export class ExamsController {
@@ -10,16 +13,13 @@ export class ExamsController {
     private readonly vdiService: VdiService
   ) {}
 
-  // --- CRUD ENDPOINTS (Nếu bạn chưa implement trong Service mới, hãy comment lại hoặc thêm vào Service) ---
-  // Hiện tại Service mới chỉ có findAll, findOne, startExamSession.
-  // Để fix lỗi build nhanh, ta sẽ tạm thời comment các hàm CRUD chưa có.
-
-  /*
+  @UseGuards(JwtAuthGuard)
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.ADMIN, UserRole.PROCTOR)
   @Post()
   create(@Body() createExamDto: any) {
     return this.examsService.create(createExamDto);
   }
-  */
 
   @UseGuards(JwtAuthGuard)
   @Get()
@@ -33,17 +33,21 @@ export class ExamsController {
     return this.examsService.findOne(+id);
   }
 
-  /*
+  @UseGuards(JwtAuthGuard)
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.ADMIN, UserRole.PROCTOR)
   @Patch(':id')
   update(@Param('id') id: string, @Body() updateExamDto: any) {
     return this.examsService.update(+id, updateExamDto);
   }
 
+  @UseGuards(JwtAuthGuard)
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.ADMIN, UserRole.PROCTOR)
   @Delete(':id')
   remove(@Param('id') id: string) {
     return this.examsService.remove(+id);
   }
-  */
 
   // --- LOGIC THI CỬ (QUAN TRỌNG) ---
 

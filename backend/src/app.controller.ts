@@ -34,6 +34,6 @@ export class AppController {
     // 2. Gọi hàm tạo token
     const token = await this.vdiService.generateConnectionToken(userId, ip);
 
-    return { token, ip, type: 'vnc' };
+    return { token, ip, type: 'rdp' };
   }
 }

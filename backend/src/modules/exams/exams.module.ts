@@ -6,13 +6,16 @@ import { Exam } from '../../entities/exam.entity';
 import { Vm } from '../../entities/vm.entity';
 import { User } from '../../entities/user.entity';
 import { VdiModule } from '../vdi/vdi.module'; 
+import { RolesGuard } from '../auth/guards/roles.guard';
+import { MonitoringModule } from '../monitoring/monitoring.module';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([Exam, Vm, User]),
-    VdiModule // <--- KHAI BÁO Ở ĐÂY
+    VdiModule,
+    MonitoringModule,
   ],
   controllers: [ExamsController],
-  providers: [ExamsService],
+  providers: [ExamsService, RolesGuard],
 })
 export class ExamsModule {}

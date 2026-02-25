@@ -23,10 +23,25 @@ interface ExamInterfaceProps {
   examId: number;
   userId: number;
   wsPath: string;
+  monitoringToken: string;
+  monitoringSessionId: string;
 }
 
 // --- MAIN COMPONENT ---
-export default function ExamInterface({ studentInfo, token, examId, userId, wsPath }: ExamInterfaceProps) {
+const configuredApiUrl = process.env.NEXT_PUBLIC_API_URL?.trim();
+const apiBaseUrl = configuredApiUrl
+  ? `${configuredApiUrl.replace(/\/+$/, '').replace(/\/api$/, '')}/api`
+  : '/api';
+
+export default function ExamInterface({
+  studentInfo,
+  token,
+  examId,
+  userId,
+  wsPath,
+  monitoringToken,
+  monitoringSessionId,
+}: ExamInterfaceProps) {
   // --- STATES ---
   const [timeLeft, setTimeLeft] = useState(studentInfo.timeLeft);
   const [isLocked, setIsLocked] = useState(false);
@@ -52,7 +67,7 @@ export default function ExamInterface({ studentInfo, token, examId, userId, wsPa
   // 1. CORE LOGIC: LOGGING & API
   // ==============================
 
-  const logActivity = async (action: string, details: string = "") => {
+  const logActivity = async (action: string, details: string = "", meta?: Record<string, unknown>) => {
     // Rule 1: Nếu đang nộp bài -> Không ghi log gì nữa (trừ log SUBMIT chính nó)
     if (isSubmittingRef.current && action !== 'SUBMIT') return;
 
@@ -63,9 +78,39 @@ export default function ExamInterface({ studentInfo, token, examId, userId, wsPa
       await api.post('/monitoring/log', {
         examId, userId, action, 
         details: details || `VM: ${studentInfo.vmIp}`, 
-        clientIp: studentInfo.clientIp
+        clientIp: studentInfo.clientIp,
+        sessionId: monitoringSessionId,
+        meta: {
+          vmIp: studentInfo.vmIp,
+          vmUsername: studentInfo.vmUsername,
+          ...meta,
+        },
       });
     } catch (e) { console.error("Log failed:", e); }
+  };
+
+  const sendBeaconLog = (action: string, details: string = "", meta?: Record<string, unknown>) => {
+    try {
+      const payload = JSON.stringify({
+        action,
+        details,
+        examId,
+        userId,
+        sessionId: monitoringSessionId,
+        monitorToken: monitoringToken,
+        meta: {
+          vmIp: studentInfo.vmIp,
+          vmUsername: studentInfo.vmUsername,
+          ...meta,
+        },
+      });
+      navigator.sendBeacon(
+        `${apiBaseUrl}/monitoring/beacon`,
+        new Blob([payload], { type: 'application/json' }),
+      );
+    } catch (e) {
+      console.error('Beacon log failed:', e);
+    }
   };
 
   // Hàm được gọi từ GuacamoleDisplay khi có thao tác
@@ -111,15 +156,16 @@ export default function ExamInterface({ studentInfo, token, examId, userId, wsPa
     // Xử lý khi đóng tab đột ngột
     const handleUnload = () => {
       if (isSubmittingRef.current) return;
-      const data = JSON.stringify({ examId, userId, action: 'LEAVE', clientIp: studentInfo.clientIp });
-      navigator.sendBeacon('/api/monitoring/log', new Blob([data], { type: 'application/json' }));
+      sendBeaconLog('LEAVE', 'Rời khỏi trang thi đột ngột');
     };
     window.addEventListener('beforeunload', handleUnload);
 
     // Heartbeat Interval: Chỉ chạy khi KHÔNG có vi phạm
     const heartbeatInterval = setInterval(() => {
        if (hasStarted && !isSubmittingRef.current && !violation && Date.now() - lastActivityRef.current < 60000) {
-           logActivity('ACTIVE', 'Heartbeat signal (User active)');
+           logActivity('ACTIVE', 'Heartbeat signal (User active)', {
+            idleMs: Date.now() - lastActivityRef.current,
+           });
        }
     }, 60000);
 
@@ -146,10 +192,10 @@ export default function ExamInterface({ studentInfo, token, examId, userId, wsPa
   // 3. ANTI-CHEAT ENGINE
   // ==============================
   
-  const triggerViolation = (reason: string) => {
+  const triggerViolation = (action: string, reason: string) => {
       if (!hasStarted || isSubmittingRef.current || violation) return;
       setViolation(reason);
-      logActivity('VIOLATION', reason);
+      logActivity(action, reason);
       if (document.pointerLockElement) document.exitPointerLock();
   };
 
@@ -168,7 +214,9 @@ export default function ExamInterface({ studentInfo, token, examId, userId, wsPa
       // Chặn phím hệ thống
       if (['F12', 'F11', 'F5', 'ContextMenu', 'Meta'].includes(e.key) || (e.ctrlKey && e.key === 'r')) {
           e.preventDefault();
-          if(e.key === 'Meta' || e.key === 'ContextMenu') triggerViolation('Sử dụng phím hệ thống (Windows/Menu)');
+          if(e.key === 'Meta' || e.key === 'ContextMenu') {
+            triggerViolation('VIOLATION_SYSTEM_KEY', 'Sử dụng phím hệ thống (Windows/Menu)');
+          }
       }
 
       // Xử lý Alt + Enter (Hợp lệ)
@@ -177,25 +225,27 @@ export default function ExamInterface({ studentInfo, token, examId, userId, wsPa
           document.exitPointerLock();
           setIsLocked(false);
           setShowExitConfirm(true); 
-          logActivity('UNLOCK_MOUSE', 'Chủ động mở menu (Alt+Enter)');
+          logActivity('UNLOCK_MOUSE', 'Chủ động mở menu (Alt+Enter)', { intentional: true });
           return;
       }
 
       // Xử lý Alt + Tab (Vi phạm)
-      if (e.altKey && e.key === 'Tab') triggerViolation('Sử dụng Alt + Tab');
+      if (e.altKey && e.key === 'Tab') {
+        triggerViolation('VIOLATION_ALT_TAB', 'Sử dụng Alt + Tab');
+      }
     };
 
     const handleBlur = () => {
         if (!hasStarted || isSubmittingRef.current) return;
         // Zero Trust: Mất tiêu điểm là vi phạm (Trừ khi đang trong quy trình hợp lệ nào đó chưa implement)
-        triggerViolation('Mất tiêu điểm (Chuyển cửa sổ/Alt+Tab)');
+        triggerViolation('VIOLATION_BLUR', 'Mất tiêu điểm (Chuyển cửa sổ/Alt+Tab)');
     };
 
     const handleMouseLeave = () => {
         if (!hasStarted || isSubmittingRef.current) return;
         // Nếu chuột rời vùng mà không phải do mở menu hay mở popup nộp bài -> Vi phạm
         if (!isUnlockIntentRef.current && !showExitConfirm && !showSubmitConfirm && !isLocked) {
-            triggerViolation('Di chuyển chuột ra khỏi màn hình thi');
+            triggerViolation('VIOLATION_MOUSE_LEAVE', 'Di chuyển chuột ra khỏi màn hình thi');
         }
     };
 
@@ -206,7 +256,7 @@ export default function ExamInterface({ studentInfo, token, examId, userId, wsPa
         setIsLocked(false);
         // Nếu mất lock mà không phải do Alt+Enter (Menu) hoặc đang hiện Confirm Submit -> Vi phạm
         if (hasStarted && !isSubmittingRef.current && !isUnlockIntentRef.current && !showSubmitConfirm) {
-            triggerViolation('Thoát khóa chuột trái phép');
+            triggerViolation('VIOLATION_POINTER_UNLOCK', 'Thoát khóa chuột trái phép');
         }
       }
     };
@@ -214,7 +264,9 @@ export default function ExamInterface({ studentInfo, token, examId, userId, wsPa
     const handleFullscreenChange = () => {
       if (!document.fullscreenElement) {
         setIsFullscreen(false);
-        if (hasStarted && !isSubmittingRef.current) triggerViolation('Thoát chế độ toàn màn hình');
+        if (hasStarted && !isSubmittingRef.current) {
+          triggerViolation('VIOLATION_FULLSCREEN_EXIT', 'Thoát chế độ toàn màn hình');
+        }
       } else {
         setIsFullscreen(true);
       }

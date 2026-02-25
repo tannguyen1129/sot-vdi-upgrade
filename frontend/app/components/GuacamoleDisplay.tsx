@@ -14,6 +14,7 @@ export default function GuacamoleDisplay({ token, wsPath, isLocked = false, onAc
   const containerRef = useRef<HTMLDivElement>(null);
   const displayMountRef = useRef<HTMLDivElement>(null);
   const clientRef = useRef<any>(null);
+  const isUnmountingRef = useRef(false);
   
   // Ref trạng thái
   const isConnected = useRef(false);
@@ -60,6 +61,7 @@ export default function GuacamoleDisplay({ token, wsPath, isLocked = false, onAc
   useEffect(() => {
     if (!token || !wsPath) return;
     if (clientRef.current) return;
+    isUnmountingRef.current = false;
 
     console.log("🚀 Initializing Guacamole Connection...");
     setStatus("CONNECTING...");
@@ -73,9 +75,15 @@ export default function GuacamoleDisplay({ token, wsPath, isLocked = false, onAc
     const w = 1600; 
     const h = 900; 
 
-    // URL kết nối
-    const query = `token=${encodeURIComponent(token)}&width=${w}&height=${h}&dpi=96`;
-    const tunnelUrl = `${protocol}//${host}${cleanWsPath}?${query}`;
+    // Quan trọng: guacamole-common-js tự nối query trong client.connect(data).
+    // Nếu đưa query trực tiếp vào tunnel URL sẽ dễ bị dính '?undefined'.
+    const query = new URLSearchParams({
+      token,
+      width: String(w),
+      height: String(h),
+      dpi: '96',
+    }).toString();
+    const tunnelUrl = `${protocol}//${host}${cleanWsPath}`;
 
     const tunnel = new (Guacamole as any).WebSocketTunnel(tunnelUrl);
     const client = new (Guacamole as any).Client(tunnel);
@@ -84,7 +92,16 @@ export default function GuacamoleDisplay({ token, wsPath, isLocked = false, onAc
     // Error Handler
     client.onerror = (error: any) => {
         console.error("Guac Error:", error);
-        if (error.code === 519 || error.message?.includes("Connection closed")) return;
+        // Các mã/lỗi này thường xuất hiện khi phiên bị đóng có chủ đích (nộp bài/thoát phiên).
+        if (
+          isUnmountingRef.current ||
+          error.code === 519 ||
+          error.code === 520 ||
+          error.message?.includes("Connection closed") ||
+          error.message?.includes("Aborted")
+        ) {
+          return;
+        }
         setStatus("ERROR");
         setErrorMsg(error.message || `Error Code: ${error.code}`);
         isConnected.current = false;
@@ -127,10 +144,12 @@ export default function GuacamoleDisplay({ token, wsPath, isLocked = false, onAc
     if (containerRef.current) containerRef.current.style.cursor = 'none';
 
     mouse.onmousedown = mouse.onmouseup = mouse.onmousemove = (state: any) => {
-        if (!isLocked && isConnected.current) {
-            client.sendMouseState(state);
-            if (onActivity) onActivity();
-        }
+        const hasPointerLock = document.pointerLockElement !== null;
+        const canSendMouse = isConnected.current && (!isLocked || hasPointerLock);
+        if (!canSendMouse) return;
+
+        client.sendMouseState(state);
+        if (onActivity) onActivity();
     };
 
     // Keyboard Handler
@@ -138,9 +157,10 @@ export default function GuacamoleDisplay({ token, wsPath, isLocked = false, onAc
     kbd.onkeydown = (k: any) => isConnected.current && client.sendKeyEvent(1, k);
     kbd.onkeyup = (k: any) => isConnected.current && client.sendKeyEvent(0, k);
 
-    client.connect();
+    client.connect(query);
 
     return () => {
+        isUnmountingRef.current = true;
         isConnected.current = false;
         if (client) try { client.disconnect(); } catch {}
         clientRef.current = null;

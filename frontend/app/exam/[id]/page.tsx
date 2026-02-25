@@ -5,7 +5,7 @@ import { useParams, useRouter } from "next/navigation";
 import api from "../../utils/axios"; // Đảm bảo đường dẫn import đúng
 
 import ExamLobby from "./components/ExamLobby";
-import ExamMachine from "./components/ExamMachine";
+import ExamInterface from "../../components/ExamInterface";
 
 // Interface cho dữ liệu phiên thi trả về từ Backend API /join
 interface ExamSessionData {
@@ -15,6 +15,8 @@ interface ExamSessionData {
     username: string;
   };
   wsPath?: string; // Thêm wsPath nếu backend trả về
+  monitoringToken?: string;
+  monitoringSessionId?: string;
 }
 
 export default function ExamPage() {
@@ -34,6 +36,10 @@ export default function ExamPage() {
   // Lưu session gồm Token và Info máy ảo sau khi Join thành công
   // Quan trọng: token chính là chìa khóa để render ExamMachine
   const [token, setToken] = useState<string | null>(null);
+  const [vmIp, setVmIp] = useState<string>("");
+  const [vmUsername, setVmUsername] = useState<string>("student");
+  const [monitoringToken, setMonitoringToken] = useState<string>("");
+  const [monitoringSessionId, setMonitoringSessionId] = useState<string>("");
   const [wsPath, setWsPath] = useState<string>("");
   
   const [loading, setLoading] = useState(false);
@@ -104,6 +110,10 @@ export default function ExamPage() {
         if (connectionToken) {
             console.log("[ExamPage] Join success! Token received.");
             setWsPath(wsPath);
+            setVmIp(res.data.ip || res.data.vmInfo?.ip || '');
+            setVmUsername(res.data.vmUsername || res.data.vmInfo?.username || 'student');
+            setMonitoringToken(res.data.monitoringToken || '');
+            setMonitoringSessionId(res.data.monitoringSessionId || '');
             setToken(connectionToken); // Set token -> Chuyển sang màn hình thi
         } else {
             setErrorMsg("Lỗi: Server không trả về Token kết nối.");
@@ -116,14 +126,6 @@ export default function ExamPage() {
     } finally {
         setLoading(false);
     }
-  };
-
-  const handleExitExam = () => {
-      // Xử lý nộp bài hoặc thoát
-      if (confirm("Bạn có chắc muốn thoát và nộp bài?")) {
-          // Gọi API finish nếu cần
-          router.push("/dashboard");
-      }
   };
 
   // --- RENDER ---
@@ -139,12 +141,30 @@ export default function ExamPage() {
 
   // TRƯỜNG HỢP 1: ĐÃ CÓ TOKEN (Đã Join thành công) -> VÀO MÁY THI
   if (token && user && exam) {
+    const now = Date.now();
+    const endTimeMs = exam?.endTime ? new Date(exam.endTime).getTime() : NaN;
+    const timeLeft = Number.isFinite(endTimeMs)
+      ? Math.max(0, Math.floor((endTimeMs - now) / 1000))
+      : 3 * 60 * 60;
+
     return (
-      <ExamMachine 
-        examName={exam.name}
+      <ExamInterface
+        examId={Number(examId)}
+        userId={user.id}
         token={token}
         wsPath={wsPath}
-        onExit={handleExitExam}
+        monitoringToken={monitoringToken}
+        monitoringSessionId={monitoringSessionId}
+        studentInfo={{
+          name: user.fullName || user.username,
+          username: user.username,
+          className: user.className || "N/A",
+          department: user.department || "SOT",
+          clientIp: "N/A",
+          vmIp: vmIp || "N/A",
+          vmUsername: vmUsername || "student",
+          timeLeft,
+        }}
       />
     );
   }

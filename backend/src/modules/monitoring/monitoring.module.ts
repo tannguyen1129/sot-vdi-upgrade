@@ -10,5 +10,6 @@ import { User } from 'src/entities/user.entity';
   imports: [TypeOrmModule.forFeature([ExamLog, User, Vm])],
   controllers: [MonitoringController],
   providers: [MonitoringService], // [MỚI] Đăng ký Provider ở đây
+  exports: [MonitoringService],
 })
 export class MonitoringModule {}

@@ -9,13 +9,18 @@ export class VdiService {
   private readonly logger = new Logger(VdiService.name);
   private redis: Redis;
   private docker: Docker;
-  
-  // [FIX] Cấu hình mã hóa chuẩn
   private readonly algorithm = 'aes-256-cbc';
-  // Key 32 bytes cố định
-  private readonly key = Buffer.from('12345678901234567890123456789012', 'utf8');
+  private readonly key: Buffer;
+  private readonly vmUsername: string;
+  private readonly vmPassword: string;
 
   constructor(private configService: ConfigService) {
+    const rawKey = this.configService.get<string>('GUAC_TOKEN_KEY') || '12345678901234567890123456789012';
+    const keyBuffer = Buffer.from(rawKey, 'utf8');
+    this.key = keyBuffer.length === 32 ? keyBuffer : crypto.createHash('sha256').update(rawKey).digest();
+    this.vmUsername = this.configService.get<string>('EXAM_VM_USERNAME') || 'student';
+    this.vmPassword = this.configService.get<string>('EXAM_VM_PASSWORD') || '123456';
+
     this.redis = new Redis({
       host: this.configService.get('REDIS_HOST') || 'umt_redis',
       port: 6379,
@@ -26,7 +31,13 @@ export class VdiService {
   // --- HÀM 1: CẤP PHÁT MÁY THI ---
   async allocateContainer(userId: number, examId: number): Promise<{ ip: string; containerId: string }> {
     const containerName = `exam_${examId}_u${userId}`;
-    const imageName = 'sot-exam-linux:latest';
+    const imageName = this.configService.get<string>('EXAM_IMAGE_NAME') || 'sot-exam-linux:latest';
+    const memoryMbRaw = Number(this.configService.get<string>('EXAM_VM_MEMORY_MB') || '2048');
+    const cpuRaw = Number(this.configService.get<string>('EXAM_VM_CPUS') || '1.5');
+    const shmMbRaw = Number(this.configService.get<string>('EXAM_VM_SHM_MB') || '512');
+    const memoryMb = Number.isFinite(memoryMbRaw) && memoryMbRaw > 0 ? memoryMbRaw : 2048;
+    const cpu = Number.isFinite(cpuRaw) && cpuRaw > 0 ? cpuRaw : 1.5;
+    const shmMb = Number.isFinite(shmMbRaw) && shmMbRaw > 0 ? shmMbRaw : 512;
 
     this.logger.log(`🚀 [VDI] Allocating ${containerName}...`);
 
@@ -35,9 +46,40 @@ export class VdiService {
       const examNetObj = networks.find(n => n.Name.includes('exam_net'));
       if (!examNetObj) throw new Error('Không tìm thấy mạng exam_net!');
       const networkName = examNetObj.Name;
+      const targetImage = await this.docker.getImage(imageName).inspect();
+      const targetImageId = targetImage.Id;
 
       try {
         const oldContainer = this.docker.getContainer(containerName);
+        const oldData = await oldContainer.inspect();
+
+        if (oldData.Image !== targetImageId) {
+          this.logger.warn(`♻️ [VDI] ${containerName} chạy image cũ, recreate để dùng image mới`);
+          await oldContainer.remove({ force: true });
+          throw new Error('stale-container-removed');
+        }
+
+        if (oldData.State?.Status === 'running') {
+          let oldIp = oldData.NetworkSettings.Networks[networkName]?.IPAddress;
+          if (!oldIp) {
+            const anyNet = Object.values(oldData.NetworkSettings.Networks)[0] as any;
+            oldIp = anyNet?.IPAddress;
+          }
+
+          if (oldIp) {
+            const healthStatus = oldData.State?.Health?.Status;
+            // Backend không nằm trong exam_net nên không thể probe TCP trực tiếp đến IP máy thi.
+            // Dùng trạng thái container + healthcheck nội bộ để quyết định tái sử dụng.
+            if (healthStatus === 'healthy' || !healthStatus) {
+              this.logger.log(`♻️ [VDI] Reusing ${containerName} -> ${oldIp}`);
+              return { ip: oldIp, containerId: oldContainer.id };
+            }
+
+            this.logger.warn(`♻️ [VDI] ${containerName} running nhưng health=${healthStatus}, sẽ recreate`);
+          }
+        }
+
+        // Container cũ không dùng được nữa -> xóa để tạo mới sạch
         await oldContainer.remove({ force: true });
       } catch (e) { }
 
@@ -49,20 +91,33 @@ export class VdiService {
           // [FIX QUAN TRỌNG] Đổi thành false để debug. 
           // Nếu container crash, nó vẫn nằm đó để ta xem log.
           AutoRemove: false, 
-          Memory: 1024 * 1024 * 1024,
-          NanoCpus: 1000000000,
+          Memory: Math.floor(memoryMb * 1024 * 1024),
+          NanoCpus: Math.floor(cpu * 1_000_000_000),
+          ShmSize: Math.floor(shmMb * 1024 * 1024),
         },
-        Env: [`VNC_PW=123456`]
+        Env: [
+          `EXAM_VM_USERNAME=${this.vmUsername}`,
+          `EXAM_VM_PASSWORD=${this.vmPassword}`,
+        ],
       });
+
+      this.logger.log(
+        `🧩 [VDI] Resource profile -> RAM=${memoryMb}MB CPU=${cpu} SHM=${shmMb}MB`,
+      );
 
       await newContainer.start();
       
-      // [FIX] CƠ CHẾ CHỜ VÀ LẤY IP THÔNG MINH
+      // Chờ container sẵn sàng và có IP hợp lệ
       let ip: string | null = null;
+      let serviceReady = false;
+      const maxWaitSecondsRaw = Number(this.configService.get<string>('VDI_ALLOCATE_TIMEOUT_SEC') || '90');
+      const maxWaitSeconds = Number.isFinite(maxWaitSecondsRaw) && maxWaitSecondsRaw > 0 ? maxWaitSecondsRaw : 90;
+      const deadline = Date.now() + maxWaitSeconds * 1000;
+      let attempts = 0;
       
-      // Thử tối đa 5 lần (tổng 5 giây), nếu có IP thì lấy luôn không cần đợi hết 5s
-      for (let i = 0; i < 5; i++) {
-          await new Promise(resolve => setTimeout(resolve, 1000));
+      // Dùng deadline thay vì vòng lặp cố định để tránh thời gian thực bị kéo dài ngoài dự kiến.
+      while (Date.now() < deadline) {
+          attempts += 1;
           const data = await newContainer.inspect();
           
           // NẾU CONTAINER BỊ CRASH VÀ EXIT NGAY LẬP TỨC
@@ -84,11 +139,32 @@ export class VdiService {
              ip = anyNet?.IPAddress;
           }
           
-          if (ip) break; // Thoát vòng lặp ngay khi có IP
+          if (!ip) {
+            await new Promise(resolve => setTimeout(resolve, 1000));
+            continue;
+          }
+
+          const healthStatus = data.State?.Health?.Status;
+          if (healthStatus === 'healthy') {
+            serviceReady = true;
+            break;
+          }
+
+          // Fallback cho image chưa có HEALTHCHECK.
+          if (!healthStatus && attempts >= 8) {
+            serviceReady = true;
+            break;
+          }
+
+          await new Promise(resolve => setTimeout(resolve, 1000));
       }
 
       if (!ip) {
-         throw new Error('Container started but NO IP found after 5 seconds.');
+         throw new Error(`Container started but NO IP found after ${maxWaitSeconds} seconds.`);
+      }
+
+      if (!serviceReady) {
+         throw new Error('Exam container network ready nhưng dịch vụ RDP chưa sẵn sàng.');
       }
 
       this.logger.log(`✅ [VDI] Ready: ${containerName} -> ${ip}`);
@@ -108,9 +184,9 @@ export class VdiService {
             settings: {
                 hostname: targetIp,
                 port: '3389',
-                username: 'student',
-                password: '123456',
-                security: 'any', // <--- Để Guacamole tự đàm phán TLS với xrdp
+                username: this.vmUsername,
+                password: this.vmPassword,
+                security: 'any',
                 'ignore-cert': 'true',
                 'disable-audio': 'true',
                 'resize-method': 'display-update'
@@ -119,7 +195,7 @@ export class VdiService {
     };
 
     // Mã hóa
-    const guacToken = this.encrypt(JSON.stringify(connectionParams));
+    const guacToken = this.encrypt(connectionParams);
     
     this.logger?.log(`🔒 Encrypted Token: ${guacToken.substring(0, 15)}...`);
 
@@ -131,10 +207,19 @@ export class VdiService {
     return guacToken; 
   }
 
-  // --- HÀM 3: MÃ HÓA ĐƠN GIẢN HÓA ---
-  private encrypt(text: string): string {
-    // [DEBUG MODE] Không mã hóa, chỉ encode Base64 để truyền đi
-    return Buffer.from(text).toString('base64');
+  private encrypt(payload: Record<string, unknown>): string {
+    const iv = crypto.randomBytes(16);
+    const cipher = crypto.createCipheriv(this.algorithm, this.key, iv);
+
+    let encrypted = cipher.update(JSON.stringify(payload), 'utf8', 'base64');
+    encrypted += cipher.final('base64');
+
+    const tokenData = {
+      iv: iv.toString('base64'),
+      value: encrypted,
+    };
+
+    return Buffer.from(JSON.stringify(tokenData)).toString('base64');
   }
 
   // ... (giữ nguyên các hàm khác)
@@ -147,7 +232,8 @@ export class VdiService {
     const containerName = `exam_${examId}_u${userId}`;
     try {
       const container = this.docker.getContainer(containerName);
-      await container.stop();
+      await container.stop({ t: 5 });
+      await container.remove({ force: true });
     } catch (e) {}
   }
 }
