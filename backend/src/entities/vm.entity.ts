@@ -1,4 +1,9 @@
-import { Entity, Column, PrimaryGeneratedColumn, UpdateDateColumn } from 'typeorm';
+import {
+  Entity,
+  Column,
+  PrimaryGeneratedColumn,
+  UpdateDateColumn,
+} from 'typeorm';
 
 @Entity()
 export class Vm {
@@ -20,8 +25,7 @@ export class Vm {
   @Column({ default: false })
   isAllocated: boolean;
 
-
-  @Column({ type: 'int', nullable: true }) 
+  @Column({ type: 'int', nullable: true })
   allocatedToUserId: number | null;
 
   @Column({ nullable: true })

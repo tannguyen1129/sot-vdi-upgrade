@@ -61,7 +61,7 @@ export default function Navbar() {
     { name: 'GIÁM SÁT', href: '/admin/monitor' },
     { name: 'SINH VIÊN', href: '/admin/students' },
     { name: 'MÁY ẢO', href: '/admin/vms' },
-    { name: 'HƯỚNG DẪN', href: '/guide' }, // [MỚI]
+    { name: 'HƯỚNG DẪN', href: '/admin/guide' }, // [MỚI]
   ];
   const studentMenu = [
     { name: 'TRANG CHỦ', href: '/' },

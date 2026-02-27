@@ -23,14 +23,14 @@ export class AppController {
 
   // [FIX] Cập nhật hàm này để dùng logic mới
   @UseGuards(JwtAuthGuard)
-  @Post('allocate-resource') 
+  @Post('allocate-resource')
   async allocateResource(@Request() req) {
     const userId = req.user.id;
     const examId = 1; // Default hoặc lấy từ body
 
     // 1. Gọi hàm tạo container
     const { ip } = await this.vdiService.allocateContainer(userId, examId);
-    
+
     // 2. Gọi hàm tạo token
     const token = await this.vdiService.generateConnectionToken(userId, ip);
 

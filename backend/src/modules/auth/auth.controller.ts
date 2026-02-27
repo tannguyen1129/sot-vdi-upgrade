@@ -1,4 +1,10 @@
-import { Controller, Post, Body, UnauthorizedException, Get } from '@nestjs/common';
+import {
+  Controller,
+  Post,
+  Body,
+  UnauthorizedException,
+  Get,
+} from '@nestjs/common';
 import { AuthService } from './auth.service';
 
 @Controller('auth')
@@ -7,8 +13,12 @@ export class AuthController {
 
   @Post('login')
   async login(@Body() body: any) {
-    const user = await this.authService.validateUser(body.username, body.password);
-    if (!user) throw new UnauthorizedException('Tài khoản hoặc mật khẩu không đúng!');
+    const user = await this.authService.validateUser(
+      body.username,
+      body.password,
+    );
+    if (!user)
+      throw new UnauthorizedException('Tài khoản hoặc mật khẩu không đúng!');
     return this.authService.login(user);
   }
 }

@@ -30,7 +30,9 @@ export class AuthService implements OnModuleInit {
         if (existingAdmin.role !== UserRole.ADMIN) {
           existingAdmin.role = UserRole.ADMIN;
           await this.usersService.save(existingAdmin);
-          this.logger.warn('⚠️ Đã tự động nâng quyền tài khoản admin lên ADMIN.');
+          this.logger.warn(
+            '⚠️ Đã tự động nâng quyền tài khoản admin lên ADMIN.',
+          );
         } else {
           this.logger.log('✅ Admin đã tồn tại. Bỏ qua bước tạo mới.');
         }

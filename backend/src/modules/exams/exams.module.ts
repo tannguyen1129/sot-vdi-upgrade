@@ -5,7 +5,7 @@ import { ExamsController } from './exams.controller';
 import { Exam } from '../../entities/exam.entity';
 import { Vm } from '../../entities/vm.entity';
 import { User } from '../../entities/user.entity';
-import { VdiModule } from '../vdi/vdi.module'; 
+import { VdiModule } from '../vdi/vdi.module';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { MonitoringModule } from '../monitoring/monitoring.module';
 

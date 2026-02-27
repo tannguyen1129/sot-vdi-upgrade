@@ -1,4 +1,9 @@
-import { Injectable, Logger, BadRequestException, NotFoundException } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  BadRequestException,
+  NotFoundException,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -35,7 +40,9 @@ export class ExamsService {
     this.validateExamTimeRange(createExamDto);
     const exam = this.examsRepository.create({
       ...createExamDto,
-      startTime: createExamDto.startTime ? new Date(createExamDto.startTime) : null,
+      startTime: createExamDto.startTime
+        ? new Date(createExamDto.startTime)
+        : null,
       endTime: createExamDto.endTime ? new Date(createExamDto.endTime) : null,
     } as Partial<Exam>);
     return this.examsRepository.save(exam);
@@ -44,7 +51,10 @@ export class ExamsService {
   async update(id: number, updateExamDto: Partial<Exam>) {
     const exam = await this.findOne(id);
 
-    if (updateExamDto.startTime !== undefined || updateExamDto.endTime !== undefined) {
+    if (
+      updateExamDto.startTime !== undefined ||
+      updateExamDto.endTime !== undefined
+    ) {
       this.validateExamTimeRange({
         startTime: updateExamDto.startTime ?? exam.startTime,
         endTime: updateExamDto.endTime ?? exam.endTime,
@@ -53,8 +63,14 @@ export class ExamsService {
 
     Object.assign(exam, {
       ...updateExamDto,
-      startTime: updateExamDto.startTime !== undefined ? new Date(updateExamDto.startTime) : exam.startTime,
-      endTime: updateExamDto.endTime !== undefined ? new Date(updateExamDto.endTime) : exam.endTime,
+      startTime:
+        updateExamDto.startTime !== undefined
+          ? new Date(updateExamDto.startTime)
+          : exam.startTime,
+      endTime:
+        updateExamDto.endTime !== undefined
+          ? new Date(updateExamDto.endTime)
+          : exam.endTime,
     });
 
     return this.examsRepository.save(exam);
@@ -77,11 +93,13 @@ export class ExamsService {
     // 2. Tạo token kết nối
     // (Thay vì gọi generateGuacamoleToken cũ)
     const token = await this.vdiService.generateConnectionToken(userId, ip);
-    const { token: monitoringToken, sessionId } = this.monitoringService.createMonitoringToken(userId, examId);
-    const vmUsername = this.configService.get<string>('EXAM_VM_USERNAME') || 'student';
+    const { token: monitoringToken, sessionId } =
+      this.monitoringService.createMonitoringToken(userId, examId);
+    const vmUsername =
+      this.configService.get<string>('EXAM_VM_USERNAME') || 'student';
 
-    return { 
-      token, 
+    return {
+      token,
       type: 'rdp',
       ip,
       vmUsername,
@@ -101,7 +119,9 @@ export class ExamsService {
       throw new BadRequestException('Thời gian kỳ thi không hợp lệ');
     }
     if (end <= start) {
-      throw new BadRequestException('Thời gian kết thúc phải lớn hơn thời gian bắt đầu');
+      throw new BadRequestException(
+        'Thời gian kết thúc phải lớn hơn thời gian bắt đầu',
+      );
     }
   }
 }

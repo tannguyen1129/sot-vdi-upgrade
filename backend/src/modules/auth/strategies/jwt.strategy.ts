@@ -10,12 +10,14 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
       ignoreExpiration: false,
       // Đọc secret từ biến môi trường thông qua ConfigService
-      secretOrKey: configService.get<string>('JWT_SECRET') || 'your-secret-key', 
+      secretOrKey: configService.get<string>('JWT_SECRET') || 'your-secret-key',
     });
   }
 
   async validate(payload: any) {
-    const role = String(payload?.role || '').trim().toUpperCase();
+    const role = String(payload?.role || '')
+      .trim()
+      .toUpperCase();
     return { id: payload.sub, username: payload.username, role };
   }
 }

@@ -1,0 +1,74 @@
+version: "3.8"
+
+services:
+  worker_redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    networks:
+      - vdi_net
+
+  worker_guacd:
+    build:
+      context: ../../guacd-custom
+    restart: unless-stopped
+    networks:
+      - vdi_net
+      - exam_net
+
+  worker_backend:
+    build:
+      context: ../../backend
+    restart: unless-stopped
+    env_file:
+      - .env.worker
+    environment:
+      PORT: 3000
+      REDIS_HOST: worker_redis
+      REDIS_PORT: 6379
+      GUACD_HOST: worker_guacd
+      GUACD_PORT: 4822
+    ports:
+      - "${WORKER_PUBLIC_PORT:-3000}:3000"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      - worker_redis
+      - worker_guacd
+    networks:
+      - vdi_net
+      - exam_net
+
+  worker_heartbeat:
+    image: docker:27.3.1-cli
+    restart: unless-stopped
+    env_file:
+      - .env.worker
+    environment:
+      CONTROL_PLANE_API_BASE: ${CONTROL_PLANE_API_BASE}
+      WORKER_CODE: ${WORKER_CODE}
+      WORKER_NAME: ${WORKER_NAME}
+      WORKER_API_BASE_URL: ${WORKER_API_BASE_URL}
+      WORKER_CLUSTER_TOKEN: ${WORKER_CLUSTER_TOKEN}
+      WORKER_RESERVED_CPUS: ${WORKER_RESERVED_CPUS}
+      WORKER_RESERVED_MEMORY_MB: ${WORKER_RESERVED_MEMORY_MB}
+      VM_CPU_CORES: ${EXAM_VM_CPUS}
+      VM_MEMORY_MB: ${EXAM_VM_MEMORY_MB}
+      HEARTBEAT_INTERVAL_SEC: ${HEARTBEAT_INTERVAL_SEC:-20}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./worker-heartbeat.sh:/opt/worker-heartbeat.sh:ro
+    entrypoint:
+      - /bin/sh
+      - -lc
+      - apk add --no-cache bash curl >/dev/null && chmod +x /opt/worker-heartbeat.sh && /opt/worker-heartbeat.sh
+    depends_on:
+      - worker_backend
+    networks:
+      - vdi_net
+
+networks:
+  vdi_net:
+    driver: bridge
+  exam_net:
+    driver: bridge

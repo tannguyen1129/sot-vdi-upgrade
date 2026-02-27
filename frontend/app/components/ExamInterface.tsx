@@ -55,6 +55,7 @@ export default function ExamInterface({
   // Logic States
   const [violation, setViolation] = useState<string | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [uiNotice, setUiNotice] = useState<string | null>(null);
 
   // --- REFS ---
   const isSubmittingRef = useRef(false); // Cờ đang nộp bài (Chặn log vi phạm)
@@ -370,7 +371,10 @@ export default function ExamInterface({
       } else {
         logActivity('START', 'Bắt đầu làm bài thi');
       }
-    } catch (err) { alert("Hệ thống yêu cầu chế độ toàn màn hình để bắt đầu."); }
+    } catch (err) {
+      console.error(err);
+      setUiNotice("Hệ thống yêu cầu bật toàn màn hình để bắt đầu. Vui lòng cho phép fullscreen rồi thử lại.");
+    }
   };
 
   const attemptLock = () => {
@@ -507,6 +511,11 @@ export default function ExamInterface({
                         <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
                         <span>Mở menu tạm dừng: <kbd className="font-mono border border-gray-600 rounded px-1 bg-gray-700">Alt</kbd> + <kbd className="font-mono border border-gray-600 rounded px-1 bg-gray-700">Enter</kbd></span>
                     </div>
+                    {uiNotice && (
+                      <div className="mt-4 text-xs text-red-200 border border-red-600/40 bg-red-900/30 px-3 py-2 rounded-lg">
+                        {uiNotice}
+                      </div>
+                    )}
                 </div>
              </div>
         )}

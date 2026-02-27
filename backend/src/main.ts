@@ -37,12 +37,17 @@ async function bootstrap() {
       const connSettings = settings?.connection;
 
       if (!connSettings || !connSettings.hostname) {
-          console.error('❌ Token không hợp lệ (Missing Hostname)');
-          return callback(new Error('Invalid Token'), null);
+        console.error('❌ Token không hợp lệ (Missing Hostname)');
+        return callback(new Error('Invalid Token'), null);
       }
 
       // Khóa cứng tham số an toàn cho phiên thi + sanitize số từ query
-      const sanitizeInt = (value: unknown, fallback: number, min: number, max: number): number => {
+      const sanitizeInt = (
+        value: unknown,
+        fallback: number,
+        min: number,
+        max: number,
+      ): number => {
         const parsed = Number.parseInt(String(value ?? ''), 10);
         if (Number.isNaN(parsed)) {
           return fallback;
@@ -55,7 +60,9 @@ async function bootstrap() {
       connSettings['ignore-cert'] = 'true';
       connSettings.security = connSettings.security || 'any';
 
-      console.log(`🚀 [Guac Connect] Validated -> ${connSettings.hostname}:${connSettings.port || '3389'}`);
+      console.log(
+        `🚀 [Guac Connect] Validated -> ${connSettings.hostname}:${connSettings.port || '3389'}`,
+      );
       callback(null, settings);
     },
   };
@@ -64,7 +71,7 @@ async function bootstrap() {
     { server, path: '/guaclite' },
     { host: process.env.GUACD_HOST || '127.0.0.1', port: 4822 },
     clientOptions,
-    guacCallbacks
+    guacCallbacks,
   );
 
   guacServer.on('error', (clientConnection, error) => {

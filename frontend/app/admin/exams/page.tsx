@@ -2,6 +2,9 @@
 
 import { useEffect, useState } from "react";
 import axios from './../../utils/axios';
+import ConfirmDialog from "../../components/ui/ConfirmDialog";
+import InputDialog from "../../components/ui/InputDialog";
+import { useToast } from "../../components/ui/ToastProvider";
 
 // --- DEFINITIONS ---
 interface ExamForm {
@@ -13,22 +16,63 @@ interface ExamForm {
   isActive: boolean;
 }
 
-interface ToastState {
-  show: boolean;
-  message: string;
-  type: 'success' | 'error' | 'info';
+interface ExamCapacity {
+  examId: number;
+  poolAvailable: number;
+  activeSessions: number;
+}
+
+interface ClusterSummary {
+  totalWorkers: number;
+  healthyWorkers: number;
+  drainingWorkers: number;
+  drainedWorkers: number;
+  totalMaxSessions: number;
+  totalActiveSessions: number;
+  totalAvailableSessions: number;
+}
+
+interface WorkerNode {
+  code: string;
+  name: string;
+  isEnabled: boolean;
+  isDraining: boolean;
+  healthy: boolean;
+  activeSessions: number;
+  maxSessions: number;
+  availableSessions: number;
+  drainStatus?: 'serving' | 'draining' | 'drained';
+  lastHeartbeatAt?: string | null;
+}
+
+interface ExamItem {
+  id: number;
+  name: string;
+  description?: string;
+  accessCode?: string;
+  startTime: string;
+  endTime: string;
+  isActive: boolean;
 }
 
 export default function ExamsPage() {
-  const [exams, setExams] = useState<any[]>([]);
+  const [exams, setExams] = useState<ExamItem[]>([]);
+  const [capacityByExam, setCapacityByExam] = useState<Record<number, ExamCapacity>>({});
+  const [clusterSummary, setClusterSummary] = useState<ClusterSummary | null>(null);
+  const [workers, setWorkers] = useState<WorkerNode[]>([]);
   const [loading, setLoading] = useState(false);
+  const [reconciling, setReconciling] = useState(false);
   
   // Modal State
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
   
   // Toast State (Thông báo đẹp)
-  const [toast, setToast] = useState<ToastState>({ show: false, message: '', type: 'info' });
+  const [deleteExamId, setDeleteExamId] = useState<number | null>(null);
+  const [prewarmExamId, setPrewarmExamId] = useState<number | null>(null);
+  const [prewarmCount, setPrewarmCount] = useState("20");
+  const [forceDisableWorker, setForceDisableWorker] = useState<WorkerNode | null>(null);
+  const { showToast } = useToast();
 
   // Form State
   const [formData, setFormData] = useState<ExamForm>({
@@ -36,11 +80,6 @@ export default function ExamsPage() {
   });
 
   // --- HELPER: TOAST NOTIFICATION ---
-  const showToast = (message: string, type: 'success' | 'error' | 'info' = 'success') => {
-    setToast({ show: true, message, type });
-    setTimeout(() => setToast(prev => ({ ...prev, show: false })), 3000); // Tự tắt sau 3s
-  };
-
   // --- HELPER: DATE FORMATTING ---
   const formatDateForInput = (isoString: string) => {
     if (!isoString) return '';
@@ -60,13 +99,37 @@ export default function ExamsPage() {
   const fetchExams = async () => {
     try {
       const res = await axios.get('/exams');
-      setExams(res.data);
+      const examList: ExamItem[] = Array.isArray(res.data) ? res.data : [];
+      setExams(examList);
+
+      const capacityResults = await Promise.allSettled(
+        examList.map(async (exam) => {
+          const capRes = await axios.get(`/exams/${exam.id}/capacity`);
+          return { examId: exam.id, ...capRes.data } as ExamCapacity;
+        }),
+      );
+
+      const mapped: Record<number, ExamCapacity> = {};
+      for (const result of capacityResults) {
+        if (result.status === 'fulfilled') {
+          mapped[result.value.examId] = result.value;
+        }
+      }
+      setCapacityByExam(mapped);
+
+      try {
+        const clusterRes = await axios.get('/vdi/workers/summary');
+        setClusterSummary(clusterRes.data);
+        setWorkers(clusterRes.data?.workers || []);
+      } catch (clusterErr) {
+        console.error(clusterErr);
+      }
     } catch (err) { console.error(err); }
   };
 
   useEffect(() => { fetchExams(); }, []);
 
-  const openModal = (exam?: any) => {
+  const openModal = (exam?: ExamItem) => {
     if (exam) {
       setEditingId(exam.id);
       setFormData({
@@ -113,22 +176,86 @@ export default function ExamsPage() {
   };
 
   const handleDelete = async (id: number) => {
-    if (!confirm("CẢNH BÁO: Hành động này sẽ xóa vĩnh viễn kỳ thi và dữ liệu liên quan. Tiếp tục?")) return;
     try {
       await axios.delete(`/exams/${id}`);
       showToast("Đã xóa kỳ thi.", "info");
       fetchExams();
-    } catch (err) {
+    } catch {
       showToast("Không thể xóa kỳ thi này!", "error");
+    } finally {
+      setDeleteExamId(null);
     }
   };
 
-  const toggleStatus = async (exam: any) => {
+  const toggleStatus = async (exam: ExamItem) => {
     try {
       await axios.patch(`/exams/${exam.id}`, { isActive: !exam.isActive });
       fetchExams();
       showToast(`Đã ${!exam.isActive ? 'KÍCH HOẠT' : 'VÔ HIỆU HÓA'} kỳ thi.`, "info");
     } catch (err) { console.error(err); }
+  };
+
+  const runPrewarm = async (examId: number, rawCount: string) => {
+    const count = Number(rawCount);
+    if (!Number.isFinite(count) || count <= 0) {
+      showToast('Số lượng prewarm không hợp lệ.', 'error');
+      return;
+    }
+
+    try {
+      setLoading(true);
+      const res = await axios.post(`/exams/${examId}/prewarm`, { count: Math.floor(count) });
+      showToast(
+        `Prewarm xong: created=${res.data.created}, failed=${res.data.failed}, available=${res.data.poolAvailable}`,
+        res.data.failed > 0 ? 'info' : 'success',
+      );
+
+      const capRes = await axios.get(`/exams/${examId}/capacity`);
+      setCapacityByExam((prev) => ({ ...prev, [examId]: capRes.data }));
+    } catch (err) {
+      console.error(err);
+      showToast('Prewarm thất bại. Kiểm tra backend/worker logs.', 'error');
+    } finally {
+      setLoading(false);
+      setPrewarmExamId(null);
+    }
+  };
+
+  const handlePrewarm = (examId: number) => {
+    setPrewarmExamId(examId);
+  };
+
+  const handleWorkerStatus = async (
+    worker: WorkerNode,
+    patch: Partial<Pick<WorkerNode, 'isEnabled' | 'isDraining'>>,
+    force = false,
+  ) => {
+    try {
+      await axios.patch(`/vdi/workers/${worker.code}`, { ...patch, force });
+      await fetchExams();
+      showToast(`Đã cập nhật worker ${worker.code}.`, 'success');
+    } catch (err) {
+      console.error(err);
+      showToast(`Không thể cập nhật worker ${worker.code}.`, 'error');
+    }
+  };
+
+  const handleManualReconcile = async () => {
+    try {
+      setReconciling(true);
+      const res = await axios.post('/vdi/workers/reconcile');
+      const data = res.data || {};
+      showToast(
+        `Reconcile xong: cleaned=${data.cleaned ?? 0}, scanned=${data.scanned ?? 0}, stale=${data.staleWithoutSession ?? 0}`,
+        'info',
+      );
+      await fetchExams();
+    } catch (err) {
+      console.error(err);
+      showToast('Reconcile thất bại. Kiểm tra backend logs.', 'error');
+    } finally {
+      setReconciling(false);
+    }
   };
 
   return (
@@ -149,6 +276,14 @@ export default function ExamsPage() {
                 Quản Lý Kỳ Thi
              </h1>
              <p className="text-slate-500 mt-1 pl-5 text-sm font-medium">Thiết lập lịch thi, mã truy cập và trạng thái.</p>
+             {clusterSummary && (
+               <p className="text-slate-500 mt-1 pl-5 text-xs font-mono">
+                 Cluster: workers {clusterSummary.healthyWorkers}/{clusterSummary.totalWorkers}
+                 {' | '}slots {clusterSummary.totalAvailableSessions}/{clusterSummary.totalMaxSessions}
+                 {' | '}active {clusterSummary.totalActiveSessions}
+                 {' | '}drain {clusterSummary.drainedWorkers}/{clusterSummary.drainingWorkers}
+               </p>
+             )}
           </div>
           <button 
             onClick={() => openModal()}
@@ -184,6 +319,11 @@ export default function ExamsPage() {
                           {exam.description}
                         </p>
                       )}
+                      <div className="mt-3 text-[11px] text-slate-500 font-mono">
+                        Pool: <span className="font-bold text-emerald-700">{capacityByExam[exam.id]?.poolAvailable ?? 0}</span>
+                        {' | '}
+                        Active: <span className="font-bold text-blue-700">{capacityByExam[exam.id]?.activeSessions ?? 0}</span>
+                      </div>
                     </td>
                     
                     <td className="p-5 align-top">
@@ -237,11 +377,19 @@ export default function ExamsPage() {
                              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="square" strokeLinejoin="miter" strokeWidth={1.5} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg>
                           </button>
                           <button 
-                             onClick={() => handleDelete(exam.id)}
+                             onClick={() => setDeleteExamId(exam.id)}
                              className="p-2 text-slate-500 hover:text-red-600 hover:bg-red-50 border border-transparent hover:border-red-100 transition-all"
                              title="Xóa"
                           >
                              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="square" strokeLinejoin="miter" strokeWidth={1.5} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+                          </button>
+                          <button
+                             onClick={() => handlePrewarm(exam.id)}
+                             className="p-2 text-slate-500 hover:text-emerald-600 hover:bg-emerald-50 border border-transparent hover:border-emerald-100 transition-all"
+                             title="Prewarm máy thi"
+                             disabled={loading}
+                          >
+                             <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
                           </button>
                        </div>
                     </td>
@@ -257,6 +405,108 @@ export default function ExamsPage() {
                         </div>
                      </td>
                    </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        {/* --- WORKER CONTROL --- */}
+        <div className="mt-8 bg-white border border-slate-200 shadow-sm overflow-hidden">
+          <div className="px-5 py-4 border-b border-slate-200 bg-slate-50 flex items-center justify-between gap-3">
+            <h2 className="text-sm font-bold uppercase tracking-wide text-slate-700">Worker Cluster Control</h2>
+            <button
+              onClick={handleManualReconcile}
+              disabled={reconciling}
+              className="px-3 py-1.5 text-xs font-bold uppercase border border-blue-200 text-blue-700 hover:bg-blue-50 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {reconciling ? 'Reconciling...' : 'Reconcile now'}
+            </button>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-left border-collapse">
+              <thead>
+                <tr className="bg-slate-100 text-slate-500 text-xs font-bold uppercase tracking-wider border-b border-slate-200">
+                  <th className="p-4">Worker</th>
+                  <th className="p-4 text-center">Health</th>
+                  <th className="p-4 text-center">Mode</th>
+                  <th className="p-4 text-center">Slots</th>
+                  <th className="p-4 text-right">Tác vụ</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {workers.length === 0 ? (
+                  <tr>
+                    <td colSpan={5} className="p-6 text-center text-slate-400 text-sm">
+                      Chưa có worker nào gửi heartbeat.
+                    </td>
+                  </tr>
+                ) : (
+                  workers.map((worker) => (
+                    <tr key={worker.code} className="hover:bg-slate-50">
+                      <td className="p-4">
+                        <div className="font-mono font-bold text-slate-700">{worker.code}</div>
+                        <div className="text-xs text-slate-500">{worker.name}</div>
+                      </td>
+                      <td className="p-4 text-center">
+                        <span
+                          className={`inline-flex px-2 py-1 text-[10px] font-bold uppercase border ${
+                            worker.healthy
+                              ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                              : 'bg-red-50 text-red-700 border-red-200'
+                          }`}
+                        >
+                          {worker.healthy ? 'Healthy' : 'Stale'}
+                        </span>
+                      </td>
+                      <td className="p-4 text-center">
+                        <span
+                          className={`inline-flex px-2 py-1 text-[10px] font-bold uppercase border ${
+                            worker.drainStatus === 'drained'
+                              ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                              : worker.isDraining
+                              ? 'bg-amber-50 text-amber-700 border-amber-200'
+                              : 'bg-blue-50 text-blue-700 border-blue-200'
+                          }`}
+                        >
+                          {worker.drainStatus === 'drained'
+                            ? 'Drained'
+                            : worker.isDraining
+                            ? 'Draining'
+                            : 'Serving'}
+                        </span>
+                      </td>
+                      <td className="p-4 text-center text-xs font-mono text-slate-600">
+                        {worker.availableSessions}/{worker.maxSessions} (active {worker.activeSessions})
+                      </td>
+                      <td className="p-4 text-right">
+                        <div className="flex justify-end gap-2">
+                          <button
+                            onClick={() => handleWorkerStatus(worker, { isDraining: !worker.isDraining })}
+                            className="px-3 py-1.5 text-xs font-bold uppercase border border-slate-300 text-slate-600 hover:bg-slate-100"
+                          >
+                            {worker.isDraining ? 'Resume' : 'Drain'}
+                          </button>
+                          <button
+                            onClick={async () => {
+                              if (worker.isEnabled && worker.activeSessions > 0) {
+                                setForceDisableWorker(worker);
+                                return;
+                              }
+                              await handleWorkerStatus(worker, { isEnabled: !worker.isEnabled });
+                            }}
+                            className={`px-3 py-1.5 text-xs font-bold uppercase border ${
+                              worker.isEnabled
+                                ? 'border-red-200 text-red-600 hover:bg-red-50'
+                                : 'border-emerald-200 text-emerald-600 hover:bg-emerald-50'
+                            }`}
+                          >
+                            {worker.isEnabled ? 'Disable' : 'Enable'}
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))
                 )}
               </tbody>
             </table>
@@ -376,29 +626,53 @@ export default function ExamsPage() {
           </div>
         )}
 
-        {/* --- CUSTOM TOAST NOTIFICATION --- */}
-        <div className={`fixed top-[calc(env(safe-area-inset-top)+5rem)] right-4 z-[100] transition-all duration-300 transform ${toast.show ? 'translate-x-0 opacity-100' : 'translate-x-full opacity-0'}`}>
-           <div className={`flex items-center gap-3 px-6 py-4 border-l-4 shadow-2xl bg-white min-w-[300px]
-              ${toast.type === 'success' ? 'border-emerald-500' : ''}
-              ${toast.type === 'error' ? 'border-red-500' : ''}
-              ${toast.type === 'info' ? 'border-blue-500' : ''}
-           `}>
-              <div className={`
-                 ${toast.type === 'success' ? 'text-emerald-500' : ''}
-                 ${toast.type === 'error' ? 'text-red-500' : ''}
-                 ${toast.type === 'info' ? 'text-blue-500' : ''}
-              `}>
-                 {toast.type === 'success' && <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="square" strokeLinejoin="miter" strokeWidth={2} d="M5 13l4 4L19 7" /></svg>}
-                 {toast.type === 'error' && <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="square" strokeLinejoin="miter" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>}
-                 {toast.type === 'info' && <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="square" strokeLinejoin="miter" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>}
-              </div>
-              <div>
-                 <h4 className="font-bold text-slate-800 text-sm uppercase tracking-wide">Thông báo</h4>
-                 <p className="text-slate-600 text-sm">{toast.message}</p>
-              </div>
-           </div>
-        </div>
-
+        <ConfirmDialog
+          open={deleteExamId !== null}
+          title="Xóa kỳ thi"
+          description="Hành động này sẽ xóa vĩnh viễn kỳ thi và dữ liệu liên quan. Tiếp tục?"
+          confirmText="Xóa kỳ thi"
+          cancelText="Hủy"
+          danger
+          onCancel={() => setDeleteExamId(null)}
+          onConfirm={() => {
+            if (deleteExamId === null) return;
+            handleDelete(deleteExamId);
+          }}
+        />
+        <InputDialog
+          open={prewarmExamId !== null}
+          title="Prewarm máy thi"
+          description="Nhập số máy cần prewarm cho kỳ thi."
+          label="Số lượng máy"
+          defaultValue={prewarmCount}
+          confirmText="Chạy prewarm"
+          cancelText="Hủy"
+          loading={loading}
+          onCancel={() => setPrewarmExamId(null)}
+          onConfirm={(value) => {
+            if (prewarmExamId === null) return;
+            setPrewarmCount(value);
+            runPrewarm(prewarmExamId, value);
+          }}
+        />
+        <ConfirmDialog
+          open={Boolean(forceDisableWorker)}
+          title="Force Disable Worker"
+          description={
+            forceDisableWorker
+              ? `Worker ${forceDisableWorker.code} còn ${forceDisableWorker.activeSessions} session. Force disable có thể làm gián đoạn thí sinh. Bạn có chắc chắn tiếp tục?`
+              : ""
+          }
+          confirmText="Force Disable"
+          cancelText="Hủy"
+          danger
+          onCancel={() => setForceDisableWorker(null)}
+          onConfirm={async () => {
+            if (!forceDisableWorker) return;
+            await handleWorkerStatus(forceDisableWorker, { isEnabled: false }, true);
+            setForceDisableWorker(null);
+          }}
+        />
       </div>
     </div>
   );

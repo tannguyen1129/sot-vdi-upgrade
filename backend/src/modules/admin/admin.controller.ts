@@ -1,4 +1,15 @@
-import { Controller, Post, Get, UseInterceptors, UploadedFile, BadRequestException, Put, Delete, Param, Body } from '@nestjs/common'; // Thêm Get
+import {
+  Controller,
+  Post,
+  Get,
+  UseInterceptors,
+  UploadedFile,
+  BadRequestException,
+  Put,
+  Delete,
+  Param,
+  Body,
+} from '@nestjs/common'; // Thêm Get
 import { FileInterceptor } from '@nestjs/platform-express';
 import { AdminService } from './admin.service';
 

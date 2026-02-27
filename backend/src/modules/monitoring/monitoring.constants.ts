@@ -61,7 +61,8 @@ export function normalizeMonitoringAction(rawAction: unknown): string {
 
   // Backward compatibility with old payloads.
   if (action === 'VIOLATION') return MONITORING_ACTIONS.VIOLATION_GENERIC;
-  if (action === 'VIOLATION_FULLSCREEN') return MONITORING_ACTIONS.VIOLATION_FULLSCREEN_EXIT;
+  if (action === 'VIOLATION_FULLSCREEN')
+    return MONITORING_ACTIONS.VIOLATION_FULLSCREEN_EXIT;
 
   return action;
 }
@@ -72,7 +73,8 @@ export function isViolationAction(action: string): boolean {
 
 export function inferSeverity(action: string): ExamLogSeverity {
   if (CRITICAL_ACTIONS.has(action)) return ExamLogSeverity.CRITICAL;
-  if (WARN_ACTIONS.has(action) || isViolationAction(action)) return ExamLogSeverity.WARN;
+  if (WARN_ACTIONS.has(action) || isViolationAction(action))
+    return ExamLogSeverity.WARN;
   return ExamLogSeverity.INFO;
 }
 

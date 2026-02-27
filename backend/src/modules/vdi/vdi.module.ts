@@ -4,11 +4,13 @@ import { VdiService } from './vdi.service';
 import { VdiController } from './vdi.controller';
 import { Vm } from '../../entities/vm.entity';
 import { ExamLog } from 'src/entities/exam-log.entity';
+import { WorkerNode } from '../../entities/worker-node.entity';
+import { WorkerRegistryService } from './worker-registry.service';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([Vm, ExamLog])], // Thêm ExamLog vào đây
+  imports: [TypeOrmModule.forFeature([Vm, ExamLog, WorkerNode])],
   controllers: [VdiController],
-  providers: [VdiService],
-  exports: [VdiService],
+  providers: [VdiService, WorkerRegistryService],
+  exports: [VdiService, WorkerRegistryService],
 })
 export class VdiModule {}

@@ -40,7 +40,9 @@ export class MonitoringController {
     const bodyUserId = Number(body?.userId);
     const userId =
       req.user?.role === UserRole.ADMIN || req.user?.role === UserRole.PROCTOR
-        ? (Number.isFinite(bodyUserId) && bodyUserId > 0 ? bodyUserId : authUserId)
+        ? Number.isFinite(bodyUserId) && bodyUserId > 0
+          ? bodyUserId
+          : authUserId
         : authUserId;
 
     return this.monitoringService.createEvent({
@@ -50,7 +52,8 @@ export class MonitoringController {
       details: typeof body?.details === 'string' ? body.details : undefined,
       clientIp: this.resolveClientIp(req),
       source: ExamLogSource.WEB_CLIENT,
-      sessionId: typeof body?.sessionId === 'string' ? body.sessionId : undefined,
+      sessionId:
+        typeof body?.sessionId === 'string' ? body.sessionId : undefined,
       meta: this.asRecord(body?.meta),
     });
   }
@@ -81,7 +84,10 @@ export class MonitoringController {
       details: typeof body?.details === 'string' ? body.details : undefined,
       clientIp: this.resolveClientIp(req),
       source: ExamLogSource.BEACON,
-      sessionId: typeof body?.sessionId === 'string' ? body.sessionId : payload.sessionId,
+      sessionId:
+        typeof body?.sessionId === 'string'
+          ? body.sessionId
+          : payload.sessionId,
       meta: {
         ...(this.asRecord(body?.meta) || {}),
         via: 'sendBeacon',
@@ -92,7 +98,10 @@ export class MonitoringController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.ADMIN, UserRole.PROCTOR)
   @Get(':examId/logs')
-  async getExamLogs(@Param('examId') examId: string, @Query('take') take?: string) {
+  async getExamLogs(
+    @Param('examId') examId: string,
+    @Query('take') take?: string,
+  ) {
     const safeExamId = this.toInt(examId, 'examId');
     const safeTake = take ? Number(take) : 100;
     return this.monitoringService.getRecentLogsByExam(safeExamId, safeTake);

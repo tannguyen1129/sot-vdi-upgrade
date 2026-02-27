@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useMemo } from 'react';
 import api from './../../utils/axios';
+import { useToast } from "../../components/ui/ToastProvider";
 
 // --- INTERFACES ---
 interface Student {
@@ -14,12 +15,22 @@ interface Student {
   isActive: boolean;
 }
 
+interface UserApiRow {
+  id?: number;
+  username?: string;
+  fullName?: string;
+  className?: string;
+  department?: string;
+  role?: string;
+  isActive?: boolean;
+}
+
 export default function StudentsPage() {
   const [students, setStudents] = useState<Student[]>([]);
   const [file, setFile] = useState<File | null>(null);
   const [loading, setLoading] = useState(false);
   const [importing, setImporting] = useState(false);
-  const [message, setMessage] = useState<{ type: 'success' | 'error', text: string } | null>(null);
+  const { showToast } = useToast();
 
   const [searchTerm, setSearchTerm] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
@@ -31,9 +42,9 @@ export default function StudentsPage() {
     try {
       const res = await api.get('/admin/users');
       const studentList = Array.isArray(res.data) 
-        ? res.data.filter((u: any) => u.role === 'STUDENT' || !u.role || u.role === 'student') 
+        ? (res.data as UserApiRow[]).filter((u) => u.role === 'STUDENT' || !u.role || u.role === 'student') 
         : []; 
-      setStudents(studentList);
+      setStudents(studentList as Student[]);
     } catch (err) {
       console.error("Lỗi tải danh sách:", err);
     } finally {
@@ -62,11 +73,16 @@ export default function StudentsPage() {
 
   // --- 3. Import ---
   const handleImport = async () => {
-    if (!file) return alert("Vui lòng chọn file!");
-    if (!file.name.match(/\.(xlsx|csv)$/)) return alert("Chỉ chấp nhận file .xlsx hoặc .csv!");
+    if (!file) {
+      showToast('Vui lòng chọn file trước khi import.', 'error');
+      return;
+    }
+    if (!file.name.match(/\.(xlsx|csv)$/)) {
+      showToast('Chỉ chấp nhận file .xlsx hoặc .csv.', 'error');
+      return;
+    }
 
     setImporting(true);
-    setMessage(null);
     const formData = new FormData();
     formData.append('file', file);
 
@@ -74,13 +90,16 @@ export default function StudentsPage() {
       const res = await api.post('/admin/import-users', formData, {
         headers: { 'Content-Type': 'multipart/form-data' },
       });
-      setMessage({ type: 'success', text: res.data.message || 'Import dữ liệu thành công.' });
+      showToast(res.data.message || 'Import dữ liệu thành công.', 'success');
       fetchStudents();
       setFile(null);
       (document.getElementById('fileInput') as HTMLInputElement).value = '';
-    } catch (err: any) {
-      const errorMsg = err.response?.data?.message || 'Lỗi import file. Kiểm tra định dạng.';
-      setMessage({ type: 'error', text: errorMsg });
+    } catch (err: unknown) {
+      const payload = (err as { response?: { data?: { message?: string | string[] } } })?.response?.data?.message;
+      const errorMsg = Array.isArray(payload)
+        ? payload.join(", ")
+        : payload || 'Lỗi import file. Kiểm tra định dạng.';
+      showToast(errorMsg, 'error');
     } finally {
       setImporting(false);
     }
@@ -130,30 +149,6 @@ export default function StudentsPage() {
                 </button>
             </div>
         </div>
-
-        {/* --- MESSAGE ALERT (ĐÃ SỬA SVG) --- */}
-        {message && (
-            <div className={`mb-6 p-4 border-l-4 flex items-center gap-3 rounded shadow-sm animate-in slide-in-from-top-2 ${
-                message.type === 'success' ? 'bg-emerald-50 border-emerald-500 text-emerald-700' : 'bg-red-50 border-red-500 text-red-700'
-            }`}>
-                {/* Icon Success */}
-                {message.type === 'success' && (
-                    <svg className="w-6 h-6 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-                    </svg>
-                )}
-                {/* Icon Error */}
-                {message.type === 'error' && (
-                    <svg className="w-6 h-6 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-                    </svg>
-                )}
-                <span className="font-medium text-sm">{message.text}</span>
-                <button onClick={() => setMessage(null)} className="ml-auto hover:bg-black/5 p-1 rounded">
-                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
-                </button>
-            </div>
-        )}
 
         {/* --- TOOLBAR --- */}
         <div className="flex flex-col md:flex-row justify-between items-center mb-4 gap-4">

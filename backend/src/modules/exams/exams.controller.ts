@@ -1,4 +1,14 @@
-import { Controller, Get, Post, Body, Patch, Param, Delete, UseGuards, Request } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Post,
+  Body,
+  Patch,
+  Param,
+  Delete,
+  UseGuards,
+  Request,
+} from '@nestjs/common';
 import { ExamsService } from './exams.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { VdiService } from '../vdi/vdi.service';
@@ -10,7 +20,7 @@ import { UserRole } from '../../entities/user.entity';
 export class ExamsController {
   constructor(
     private readonly examsService: ExamsService,
-    private readonly vdiService: VdiService
+    private readonly vdiService: VdiService,
   ) {}
 
   @UseGuards(JwtAuthGuard, RolesGuard)
@@ -75,7 +85,7 @@ export class ExamsController {
 
     // [FIX] Gọi hàm dọn dẹp mới
     await this.vdiService.destroyContainer(userId, examId);
-    
+
     return { message: 'Exam finished' };
   }
 
@@ -84,9 +94,26 @@ export class ExamsController {
   @Post('leave')
   async leaveExam(@Request() req, @Body() body: any) {
     // Giả sử body có examId, nếu không thì hardcode hoặc lấy từ user session
-    const examId = body.examId || 1; 
+    const examId = body.examId || 1;
     const userId = req.user.id;
     await this.vdiService.destroyContainer(userId, examId);
     return { message: 'Left exam' };
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.ADMIN, UserRole.PROCTOR)
+  @Post(':id/prewarm')
+  async prewarmExam(@Param('id') id: string, @Body() body: { count?: number }) {
+    const examId = Number(id);
+    const count = Number(body?.count || 0);
+    return this.vdiService.prewarmExamPool(examId, count);
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.ADMIN, UserRole.PROCTOR)
+  @Get(':id/capacity')
+  async getExamCapacity(@Param('id') id: string) {
+    const examId = Number(id);
+    return this.vdiService.getExamPoolCapacity(examId);
   }
 }
